@@ -1,4 +1,3 @@
-
 import { Router } from "express";
 
 import {
@@ -64,11 +63,7 @@ router.post("/charge", async (req, res) => {
       return;
     }
 
-    const result = await chargeBuyer(
-      vaultId,
-      receiptId,
-      amount ?? "10.00"
-    );
+    const result = await chargeBuyer(vaultId, receiptId, amount ?? "10.00");
 
     res.json({
       success: true,
