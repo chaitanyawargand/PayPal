@@ -1,0 +1,14 @@
+{
+  "case_id": "case-02",
+  "expected": "not_satisfied",
+  "judge": {
+    "verdict": "not_satisfied",
+    "evidence_text": "Not waterproof.",
+    "reason": "Product explicitly states it is not waterproof."
+  },
+  "evidence_start": 38,
+  "evidence_end": 53,
+  "sliced_evidence": "Not waterproof.",
+  "pass": true,
+  "fail_type": null
+}

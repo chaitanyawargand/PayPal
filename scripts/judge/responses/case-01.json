@@ -1,0 +1,14 @@
+{
+  "case_id": "case-01",
+  "expected": "satisfied",
+  "judge": {
+    "verdict": "satisfied",
+    "evidence_text": "100% waterproof membrane.",
+    "reason": "Mentions 100% waterproof membrane."
+  },
+  "evidence_start": 14,
+  "evidence_end": 39,
+  "sliced_evidence": "100% waterproof membrane.",
+  "pass": true,
+  "fail_type": null
+}

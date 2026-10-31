@@ -1,0 +1,62 @@
+[
+  {
+    "case_id": "case-01",
+    "title": "True waterproof PASS",
+    "criterion_id": "waterproof",
+    "criterion_text": "Product must be waterproof",
+    "expected_verdict": "satisfied",
+    "evidence_must_contain_any": ["100% waterproof", "waterproof membrane"],
+    "trap_type": "none",
+    "notes": "Clean positive. Judge should cite the waterproof phrase."
+  },
+  {
+    "case_id": "case-02",
+    "title": "Negation trap",
+    "criterion_id": "waterproof",
+    "criterion_text": "Product must be waterproof",
+    "expected_verdict": "not_satisfied",
+    "evidence_must_contain_any": ["Not waterproof", "Water-resistant"],
+    "trap_type": "negation",
+    "notes": "If Judge cites only 'waterproof' and ignores 'Not', it's a NEGATION_MISSED fail."
+  },
+  {
+    "case_id": "case-03",
+    "title": "Accessory trap",
+    "criterion_id": "is_jacket_size_m",
+    "criterion_text": "Product must be a jacket, size M (not an accessory for a jacket)",
+    "expected_verdict": "not_satisfied",
+    "evidence_must_contain_any": ["cover FOR jacket", "This is not a jacket"],
+    "trap_type": "accessory",
+    "notes": "All keywords match but product type is wrong."
+  },
+  {
+    "case_id": "case-04",
+    "title": "Refurbished trap",
+    "criterion_id": "brand_new",
+    "criterion_text": "Product must be brand new",
+    "expected_verdict": "not_satisfied",
+    "evidence_must_contain_any": ["Certified Refurbished", "Refurbished"],
+    "trap_type": "qualifier",
+    "notes": "'like-new' is NOT new. Judge must not be fooled."
+  },
+  {
+    "case_id": "case-05",
+    "title": "Hidden subscription trap",
+    "criterion_id": "one_time_purchase",
+    "criterion_text": "Product must be a one-time purchase with no subscription or auto-renew",
+    "expected_verdict": "not_satisfied",
+    "evidence_must_contain_any": ["Auto-renews monthly", "Pro Plan"],
+    "trap_type": "hidden_fine_print",
+    "notes": "Proof is far from main product lines. Judge must read whole page."
+  },
+  {
+    "case_id": "case-06",
+    "title": "No proof - must say uncertain",
+    "criterion_id": "weight_under_500g",
+    "criterion_text": "Product must weigh under 500g",
+    "expected_verdict": "uncertain",
+    "evidence_must_contain_any": [],
+    "trap_type": "missing_evidence",
+    "notes": "'Lightweight' is not a number. Correct answer is uncertain, any satisfied/not_satisfied is WRONG_VERDICT."
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "case_id": "case-04",
+  "expected": "not_satisfied",
+  "judge": {
+    "verdict": "not_satisfied",
+    "evidence_text": "Certified Refurbished, like-new condition.",
+    "reason": "Refurbished and like-new condition is not brand new."
+  },
+  "evidence_start": 9,
+  "evidence_end": 51,
+  "sliced_evidence": "Certified Refurbished, like-new condition.",
+  "pass": true,
+  "fail_type": null
+}

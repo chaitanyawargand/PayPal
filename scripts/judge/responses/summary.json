@@ -1,0 +1,92 @@
+{
+  "model": "gemini-3.5-flash",
+  "total": 6,
+  "fails": 0,
+  "decision": "JUDGE_TRUSTED",
+  "results": [
+    {
+      "case_id": "case-01",
+      "expected": "satisfied",
+      "judge": {
+        "verdict": "satisfied",
+        "evidence_text": "100% waterproof membrane.",
+        "reason": "Mentions 100% waterproof membrane."
+      },
+      "evidence_start": 14,
+      "evidence_end": 39,
+      "sliced_evidence": "100% waterproof membrane.",
+      "pass": true,
+      "fail_type": null
+    },
+    {
+      "case_id": "case-02",
+      "expected": "not_satisfied",
+      "judge": {
+        "verdict": "not_satisfied",
+        "evidence_text": "Not waterproof.",
+        "reason": "Product explicitly states it is not waterproof."
+      },
+      "evidence_start": 38,
+      "evidence_end": 53,
+      "sliced_evidence": "Not waterproof.",
+      "pass": true,
+      "fail_type": null
+    },
+    {
+      "case_id": "case-03",
+      "expected": "not_satisfied",
+      "judge": {
+        "verdict": "not_satisfied",
+        "evidence_text": "This is not a jacket.",
+        "reason": "The item is a jacket cover, not a jacket."
+      },
+      "evidence_start": 60,
+      "evidence_end": 81,
+      "sliced_evidence": "This is not a jacket.",
+      "pass": true,
+      "fail_type": null
+    },
+    {
+      "case_id": "case-04",
+      "expected": "not_satisfied",
+      "judge": {
+        "verdict": "not_satisfied",
+        "evidence_text": "Certified Refurbished, like-new condition.",
+        "reason": "Refurbished and like-new condition is not brand new."
+      },
+      "evidence_start": 9,
+      "evidence_end": 51,
+      "sliced_evidence": "Certified Refurbished, like-new condition.",
+      "pass": true,
+      "fail_type": null
+    },
+    {
+      "case_id": "case-05",
+      "expected": "not_satisfied",
+      "judge": {
+        "verdict": "not_satisfied",
+        "evidence_text": "Auto-renews monthly after purchase as Pro Plan.",
+        "reason": "Product includes an auto-renewing monthly subscription."
+      },
+      "evidence_start": 157,
+      "evidence_end": 204,
+      "sliced_evidence": "Auto-renews monthly after purchase as Pro Plan.",
+      "pass": true,
+      "fail_type": null
+    },
+    {
+      "case_id": "case-06",
+      "expected": "uncertain",
+      "judge": {
+        "verdict": "uncertain",
+        "evidence_text": "",
+        "reason": "No exact weight specified in the text."
+      },
+      "evidence_start": -1,
+      "evidence_end": -1,
+      "sliced_evidence": "",
+      "pass": true,
+      "fail_type": null
+    }
+  ]
+}
