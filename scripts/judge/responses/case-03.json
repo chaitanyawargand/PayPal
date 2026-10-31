@@ -1,0 +1,14 @@
+{
+  "case_id": "case-03",
+  "expected": "not_satisfied",
+  "judge": {
+    "verdict": "not_satisfied",
+    "evidence_text": "This is not a jacket.",
+    "reason": "The item is a jacket cover, not a jacket."
+  },
+  "evidence_start": 60,
+  "evidence_end": 81,
+  "sliced_evidence": "This is not a jacket.",
+  "pass": true,
+  "fail_type": null
+}
