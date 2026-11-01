@@ -32,6 +32,7 @@ export async function executePayment(input: ExecutePaymentInput) {
     computed_total_cents: decision.computed_total_cents,
     amount_cents: decision.computed_total_cents,
     proposed_total_cents: payment.proposed_total_cents,
+    receipt_id,
   });
 
   // 3. Build the receipt body. JSON-safe values only.
@@ -50,7 +51,7 @@ export async function executePayment(input: ExecutePaymentInput) {
     reason_codes: decision.reason_codes,
     computed_total_cents: decision.computed_total_cents,
     money_moved_cents: pspResult.money_moved_cents,
-    psp_tier: "C" as const,
+    psp_tier: (pspResult.tier ?? "C") as "B" | "C",
   };
 
   return { decision, pspResult, receiptBody };
