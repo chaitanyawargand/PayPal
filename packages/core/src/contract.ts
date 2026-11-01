@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { MoneyCents } from './money.js';
-import { ContractStatus } from './index.js';
+export const ContractStatus = z.enum(['ACTIVE', 'EXPIRED', 'REVOKED']);
+export type ContractStatus = z.infer<typeof ContractStatus>;
 
 export const ContractCriterion = z.object({
   id: z.string().min(1),

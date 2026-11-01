@@ -17,14 +17,14 @@ const makePayment = (overrides: any = {}) => ({
   idempotency_key: "idem_1",
   merchant_id: "merchant_trailgear",
   merchant_order_ref: "ord_1",
-  items: [
+    items: [
     {
       sku: "JK-101",
       qty: 1,
       unit_price_cents: 7000,
-      origin_zone: "trusted_catalog",
     },
   ],
+
   proposed_total_cents: 7000,
   spans: [],
   ...overrides,
@@ -129,13 +129,12 @@ describe("executePayment", () => {
   it("untrusted-content STEP_UP moves no money", async () => {
     const psp = new MockPsp();
 
-    const payment = makePayment({
-      items: [
+        const payment = makePayment({
+      spans: [
         {
-          sku: "JK-101",
-          qty: 1,
-          unit_price_cents: 7000,
-          origin_zone: "untrusted_content",
+          id: "span_1",
+          source_url: "https://merchant.example/products/jk-101#reviews",
+          hash: "sha256:example-span-hash",
         },
       ],
     });

@@ -1,5 +1,4 @@
-import type { Verdict, ReasonCode } from "../../core/src";
-import type { IntentContract, PaymentRequest } from "../../core/src";
+import type { Verdict, ReasonCode, Contract, Payment } from "../../core/src";
 
 export interface LayerResult {
   layer: "L1";
@@ -17,8 +16,8 @@ export interface Decision {
 }
 
 export interface EngineInput {
-  contract: IntentContract;
-  payment: PaymentRequest;
+  contract: Contract;
+  payment: Payment;
   spent_cents?: number; // already captured + held, Gateway will load this from DB later
 }
 
@@ -61,12 +60,14 @@ export function decidePayment(input: EngineInput): Decision {
   // 2. PAYEE_NOT_IN_REGISTRY - T2: Agent cannot invent a payee
   // If your contract field is named differently, change ONLY this line to your schema name
   if (!contract.allowed_payee_ids.includes(payment.merchant_id)) {
-    push(
-      "payee_registry",
-      "BLOCK",
-      `${payment.merchant_id} not in contract allowlist`,
-      "PAYEE_NOT_IN_REGISTRY",
-    );
+    {
+      push(
+        "payee_registry",
+        "BLOCK",
+        `${payment.merchant_id} not in contract allowlist`,
+        "PAYEE_NOT_IN_REGISTRY",
+      );
+    }
   } else {
     push("payee_registry", "ALLOW", `${payment.merchant_id} allowed`);
   }
@@ -90,35 +91,41 @@ export function decidePayment(input: EngineInput): Decision {
     push("budget", "ALLOW", "within budget and per-order cap");
   }
 
-  // 4. BLOCKED_CATEGORY + Untrusted origin - T1
-  // Today we match by SKU because mock items don't have a real category field yet.
-  // In Phase 2, Signed Merchant Order will give the real category and this check will use that.
+  // 4. BLOCKED_CATEGORY + untrusted provenance - T1
+  // Core PaymentItem has no origin_zone. Provenance is carried by
+  // payment.spans — content lifted from a merchant page is untrusted
+  // data, so any payment built from spans tightens to STEP_UP.
+  // (Blocked category still matches by SKU until Signed Merchant
+  // Order provides a real category field.)
+  let sawItemCheck = false;
+
   for (const item of payment.items) {
     const isGiftCard = item.sku.toLowerCase().includes("gift");
     const isBlocked =
       isGiftCard && contract.blocked_categories.includes("gift_card");
 
     if (isBlocked) {
+      sawItemCheck = true;
       push(
         "blocked_category",
         "BLOCK",
         `${item.sku} is blocked gift_card`,
         "BLOCKED_CATEGORY",
       );
-    } else if (item.origin_zone === "untrusted_content") {
-      push(
-        "line_origin",
-        "STEP_UP",
-        `${item.sku} came from untrusted_content zone`,
-        "LINE_FROM_UNTRUSTED_CONTENT",
-      );
     }
   }
-  if (
-    !layer_results.some(
-      (r) => r.check === "blocked_category" || r.check === "line_origin",
-    )
-  ) {
+
+  if (payment.spans.length > 0) {
+    sawItemCheck = true;
+    push(
+      "line_origin",
+      "STEP_UP",
+      `${payment.spans.length} span(s) from untrusted content`,
+      "LINE_FROM_UNTRUSTED_CONTENT",
+    );
+  }
+
+  if (!sawItemCheck) {
     push("line_origin", "ALLOW", "all lines from trusted origin");
   }
 
