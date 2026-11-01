@@ -7,12 +7,19 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "discover": "tsx src/spikes/mcp_discover.ts",
+    "spike:mcp": "tsx src/spikes/spike_mcp.ts",
+    "spike:guard": "tsx src/spikes/test_guard.ts",
+    "vault:setup": "tsx src/spikes/setup_vault.ts",
+    "agent:auto": "tsx src/spikes/autonomous_agent.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@paypal/agent-toolkit": "^1.11.0",
     "dotenv": "^18.0.9",
     "express": "^5.3.0"
   },
