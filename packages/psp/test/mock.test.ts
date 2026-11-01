@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { MockPsp } from "../src/mock";
+import { MockPsp } from "../src/mock.ts";
 
 // Copied from packages/engine/test/engine.test.ts — do not invent a new payment shape.
 const makePayment = (overrides: any = {}) => ({
