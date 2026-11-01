@@ -1,4 +1,4 @@
-import { JudgeOutputSchema } from '../src/judge';
+import { Verdict as VerdictFromIndex, JudgeOutputSchema as JudgeFromIndex } from '../src';
 import { describe, it, expect } from 'vitest';
 describe('JudgeOutputSchema - anti-drift', () => {
   it('accepts valid judge output', () => {
@@ -11,7 +11,7 @@ describe('JudgeOutputSchema - anti-drift', () => {
       }],
       overall: 'satisfied' as const
     };
-    expect(JudgeOutputSchema.parse(valid)).toEqual(valid);
+    expect(JudgeFromIndex.parse(valid)).toEqual(valid);
   });
 
   it('rejects drifted word "allowed" instead of "satisfied"', () => {
@@ -25,7 +25,7 @@ describe('JudgeOutputSchema - anti-drift', () => {
       overall: 'satisfied'
     };
     // This MUST fail. If it passes, your schema is useless.
-    expect(JudgeOutputSchema.safeParse(drifted).success).toBe(false);
+    expect(JudgeFromIndex.safeParse(drifted).success).toBe(false);
   });
 
   it('accepts uncertain with empty evidence - Case 06 style', () => {
@@ -38,6 +38,13 @@ describe('JudgeOutputSchema - anti-drift', () => {
       }],
       overall: 'uncertain' as const
     };
-    expect(JudgeOutputSchema.safeParse(uncertain).success).toBe(true);
+    expect(JudgeFromIndex.safeParse(uncertain).success).toBe(true);
+  });
+});
+
+describe('index barrel', () => {
+  it('re-exports Verdict and Judge from index', () => {
+    expect(VerdictFromIndex.options).toContain('ALLOW');
+    expect(JudgeFromIndex).toBeDefined();
   });
 });
