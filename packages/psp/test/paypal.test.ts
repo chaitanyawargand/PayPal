@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PayPalPsp } from "../src/paypal.js";
+import { PayPalPsp } from "../src/paypal.ts";
 import type {
   PayPalVaultClient,
   VaultChargeRequest,
