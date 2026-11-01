@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { MoneyCents } from './money.js';
-import { OriginZone } from './index.js';
+
 
 export const PaymentItem = z.object({
   sku: z.string().min(1),
@@ -9,15 +9,12 @@ export const PaymentItem = z.object({
 
   unit_price_cents: MoneyCents,
 
-  origin_zone: OriginZone,
 }).strict();
 
 export const PaymentSpan = z.object({
   id: z.string().min(1),
 
   source_url: z.string().url(),
-
-  zone: OriginZone,
 
   hash: z.string().min(1),
 }).strict();
