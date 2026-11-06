@@ -113,7 +113,13 @@
         <p id="block-result" class="muted" role="status">BLOCK demo not run yet.</p>
         <pre id="block-output">{}</pre>
       </div>
-      <p id="demo-placeholder" class="muted">Evidence interaction is added next.</p>
+      <div class="mini-card">
+        <h3>Run the Evidence scenario</h3>
+        <p>Collect the signed receipts created in this session and verify their hash chain and Ed25519 signatures independently against the signing public key.</p>
+        <button id="run-evidence" type="button">Run Evidence demo</button>
+        <p id="evidence-result" class="muted" role="status">Evidence demo not run yet. Run ALLOW or BLOCK first.</p>
+        <pre id="evidence-output">{}</pre>
+      </div>
     </section>
   </main>
 
@@ -169,6 +175,31 @@
     return "";
   }
 
+  var demoReceiptIds = [];
+
+  function rememberReceipt(result) {
+    var receiptBody = (result && result.receiptBody) || (result && result.receipt_body) || {};
+    var receipt = (result && result.receipt) || {};
+    var receiptId = firstDefined([
+      receiptBody.receipt_id,
+      receiptBody.receiptId,
+      receipt.receipt_id,
+      receipt.receiptId,
+      result && result.receipt_id,
+      result && result.receiptId
+    ]);
+    if (receiptId && demoReceiptIds.indexOf(receiptId) === -1) {
+      demoReceiptIds.push(receiptId);
+    }
+    return receiptId;
+  }
+
+  function buildEvidenceRequest(entries, publicKeyPem) {
+    return {
+      entries: entries,
+      public_key_pem: publicKeyPem
+    };
+  }
   function buildAllowRequest() {
     var suffix = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     return {
@@ -231,6 +262,7 @@
 
       outputEl.textContent = JSON.stringify(result, null, 2);
       if (!res.ok) throw new Error("HTTP " + res.status);
+      rememberReceipt(result);
 
       var decision = result.decision || {};
       var pspResult = result.pspResult || result.psp_result || {};
@@ -302,6 +334,7 @@
 
       outputEl.textContent = JSON.stringify(result, null, 2);
       if (!(res.status === 200 || res.status === 422)) throw new Error("HTTP " + res.status);
+      rememberReceipt(result);
 
       var decision = result.decision || {};
       var pspResult = result.pspResult || result.psp_result || {};
@@ -339,8 +372,81 @@
     }
   }
 
+  async function runEvidenceDemo() {
+    var button = document.getElementById("run-evidence");
+    var resultEl = document.getElementById("evidence-result");
+    var outputEl = document.getElementById("evidence-output");
+
+    button.disabled = true;
+    resultEl.textContent = "Running Evidence demo...";
+    outputEl.textContent = "{}";
+
+    try {
+      if (demoReceiptIds.length === 0) {
+        throw new Error("Run ALLOW or BLOCK first to create a signed receipt.");
+      }
+
+      var statusRes = await fetch("/v1/app/status", { headers: { "accept": "application/json" } });
+      if (!statusRes.ok) throw new Error("HTTP " + statusRes.status);
+      var status = await statusRes.json();
+      var publicKeyPem = status.signing_public_key_pem || status.signingPublicKeyPem || "";
+      if (!publicKeyPem) throw new Error("Signing public key unavailable.");
+
+      var entries = [];
+      for (var i = 0; i < demoReceiptIds.length; i++) {
+        var receiptId = demoReceiptIds[i];
+        var receiptRes = await fetch("/v1/receipts/" + encodeURIComponent(receiptId), { headers: { "accept": "application/json" } });
+        if (!receiptRes.ok) throw new Error("HTTP " + receiptRes.status);
+        entries.push(await receiptRes.json());
+      }
+
+      var verifyRes = await fetch("/v1/evidence/verify", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        body: JSON.stringify(buildEvidenceRequest(entries, publicKeyPem))
+      });
+
+      var verifyResult = {};
+      try {
+        verifyResult = await verifyRes.json();
+      } catch (parseError) {
+        verifyResult = {};
+      }
+
+      outputEl.textContent = JSON.stringify({
+        evidence_request: buildEvidenceRequest(entries, publicKeyPem),
+        verification: verifyResult
+      }, null, 2);
+
+      if (!(verifyRes.status === 200 || verifyRes.status === 400)) {
+        throw new Error("HTTP " + verifyRes.status);
+      }
+
+      var checks = verifyResult.checks || {};
+      var failures = Array.isArray(verifyResult.failures) ? verifyResult.failures : [];
+
+      resultEl.textContent =
+        (verifyResult.valid ? "Evidence VALID" : "Evidence INVALID") +
+        " - chain " + (checks.chain ? "VALID" : "INVALID") +
+        " - signatures " + (checks.signatures ? "VALID" : "INVALID") +
+        " - failures " + (failures.length ? failures.join(", ") : "none") +
+        " - receipts checked " + entries.length + ".";
+
+      await loadStatus();
+    } catch (error) {
+      resultEl.textContent =
+        "Evidence demo failed: " +
+        (error && error.message ? error.message : error);
+    } finally {
+      button.disabled = false;
+    }
+  }
   document.getElementById("run-allow").addEventListener("click", runAllowDemo);
   document.getElementById("run-block").addEventListener("click", runBlockDemo);
+  document.getElementById("run-evidence").addEventListener("click", runEvidenceDemo);
   document.getElementById("refresh-status").addEventListener("click", loadStatus);
   loadStatus();
 </script>

@@ -186,3 +186,100 @@ describe("Recourse UI BLOCK payload", () => {
     expect(status.chain_verified).toBe(true);
   });
 });
+
+describe("Recourse UI Evidence demo", () => {
+  it("exposes an interactive Evidence demo wired to signed receipts", async () => {
+    const { baseUrl } = await makeApp();
+
+    const res = await fetch(`${baseUrl}/`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+
+    expect(body).toContain("Run Evidence demo");
+    expect(body).toContain('id="run-evidence"');
+    expect(body).toContain('id="evidence-result"');
+    expect(body).toContain('id="evidence-output"');
+    expect(body).toContain("demoReceiptIds");
+    expect(body).toContain("buildEvidenceRequest");
+    expect(body).toContain("async function runEvidenceDemo()");
+    expect(body).toContain("rememberReceipt(result)");
+    expect(body).toContain('fetch("/v1/app/status"');
+    expect(body).toContain('fetch("/v1/receipts/"');
+    expect(body).toContain("encodeURIComponent(receiptId)");
+    expect(body).toContain('fetch("/v1/evidence/verify"');
+    expect(body).toContain("public_key_pem");
+    expect(body).toContain("checks.chain");
+    expect(body).toContain("checks.signatures");
+    expect(body).toContain("failures");
+    expect(body).toContain('addEventListener("click", runEvidenceDemo)');
+  });
+});
+
+describe("Recourse UI Evidence payload", () => {
+  it("builds an evidence request that verifies a real signed receipt", async () => {
+    const { baseUrl } = await makeApp();
+
+    const pageRes = await fetch(`${baseUrl}/`);
+    expect(pageRes.status).toBe(200);
+    const html = await pageRes.text();
+
+    const start = html.indexOf("var demoContract");
+    const end = html.indexOf("async function runEvidenceDemo");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    const script = html.slice(start, end);
+    const factory = new Function(
+      `${script}\nreturn { buildAllowRequest, buildEvidenceRequest };`,
+    ) as unknown as () => {
+      buildAllowRequest: () => unknown;
+      buildEvidenceRequest: (entries: unknown, publicKeyPem: string) => unknown;
+    };
+    const { buildAllowRequest, buildEvidenceRequest } = factory();
+
+    const executeRes = await fetch(`${baseUrl}/v1/payments/execute`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(buildAllowRequest()),
+    });
+    expect(executeRes.status).toBe(200);
+
+    const executeResult = (await executeRes.json()) as any;
+    const receiptId = executeResult.receiptBody.receipt_id;
+    expect(typeof receiptId).toBe("string");
+
+    const receiptRes = await fetch(
+      `${baseUrl}/v1/receipts/${encodeURIComponent(receiptId)}`,
+    );
+    expect(receiptRes.status).toBe(200);
+    const signedEntry = await receiptRes.json();
+
+    const statusRes = await fetch(`${baseUrl}/v1/app/status`);
+    expect(statusRes.status).toBe(200);
+    const status = (await statusRes.json()) as any;
+    expect(typeof status.signing_public_key_pem).toBe("string");
+
+    const verifyPayload = buildEvidenceRequest(
+      [signedEntry],
+      status.signing_public_key_pem,
+    );
+    expect(verifyPayload).toEqual({
+      entries: [signedEntry],
+      public_key_pem: status.signing_public_key_pem,
+    });
+
+    const verifyRes = await fetch(`${baseUrl}/v1/evidence/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(verifyPayload),
+    });
+    const verifyResult = (await verifyRes.json()) as any;
+
+    expect(verifyRes.status).toBe(200);
+    expect(verifyResult).toEqual({
+      valid: true,
+      checks: { chain: true, signatures: true },
+      failures: [],
+    });
+  });
+});
