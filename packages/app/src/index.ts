@@ -14,6 +14,7 @@ import { createPaymentService } from "../../wiring/src/index.js";
 import type { PaymentRequest, PaymentService } from "../../wiring/src/index.js";
 import * as http from "node:http";
 import { handleEvidenceVerify } from "./evidence.js";
+import { renderRecourseUiHtml } from "./ui.js";
 
 const GENESIS_PREV_HASH = "0".repeat(64);
 
@@ -237,6 +238,23 @@ export function createApp(options: CreateAppOptions): RecourseApp {
   server.on("request", (req, res) => {
     try {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/" || pathname === "/index.html") {
+        if (req.method !== "GET") {
+          res.writeHead(405, {
+            "content-type": "application/json",
+            "cache-control": "no-store",
+          });
+          res.end(JSON.stringify({ error: "METHOD_NOT_ALLOWED" }));
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        res.end(renderRecourseUiHtml());
+        return;
+      }
+
       if (pathname === "/v1/app/status") {
         if (req.method !== "GET") {
           res.writeHead(405, {
