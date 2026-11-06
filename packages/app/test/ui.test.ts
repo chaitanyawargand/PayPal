@@ -48,6 +48,21 @@ describe("Recourse UI", () => {
     expect(body).not.toContain("BEGIN PRIVATE KEY");
   });
 
+  it("exposes an interactive ALLOW demo wired to the payment endpoint", async () => {
+    const { baseUrl } = await makeApp();
+
+    const res = await fetch(`${baseUrl}/`);
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain("Run ALLOW demo");
+    expect(body).toContain('id="run-allow"');
+    expect(body).toContain('id="allow-result"');
+    expect(body).toContain('id="allow-output"');
+    expect(body).toContain("/v1/payments/execute");
+    expect(body).toContain("merchant_trailgear");
+    expect(body).toContain("JK-101");
+  });
   it("keeps API routes working alongside the UI", async () => {
     const { baseUrl } = await makeApp();
 
@@ -56,5 +71,48 @@ describe("Recourse UI", () => {
 
     const status = await fetch(`${baseUrl}/v1/app/status`);
     expect(status.status).toBe(200);
+  });
+});
+
+describe("Recourse UI ALLOW payload", () => {
+  it("builds a payment request that executes as ALLOW", async () => {
+    const { baseUrl } = await makeApp();
+
+    const pageRes = await fetch(`${baseUrl}/`);
+    expect(pageRes.status).toBe(200);
+    const html = await pageRes.text();
+
+    const start = html.indexOf("var demoContract");
+    const end = html.indexOf("async function runAllowDemo");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    const script = html.slice(start, end);
+    const factory = new Function(
+      `${script}\nreturn buildAllowRequest;`,
+    ) as unknown as () => () => unknown;
+    const buildAllowRequest = factory();
+
+    const payload = buildAllowRequest();
+    const executeRes = await fetch(`${baseUrl}/v1/payments/execute`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const result: unknown = await executeRes.json();
+    const serialized = JSON.stringify(result);
+
+    expect(executeRes.status).toBe(200);
+    expect(serialized).toContain("ALLOW");
+    expect(serialized).toContain("7000");
+
+    const statusRes = await fetch(`${baseUrl}/v1/app/status`);
+    const status = (await statusRes.json()) as {
+      receipt_count?: unknown;
+      chain_verified?: unknown;
+    };
+
+    expect(status.receipt_count).toBe(1);
+    expect(status.chain_verified).toBe(true);
   });
 });

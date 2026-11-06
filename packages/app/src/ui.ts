@@ -99,7 +99,14 @@
         <div class="mini-card"><h3>2. BLOCK</h3><p>Merchant tampering moves $0 and still creates a signed receipt.</p></div>
         <div class="mini-card"><h3>3. Evidence</h3><p>Signed receipts verify independently against the public key.</p></div>
       </div>
-      <p id="demo-placeholder" class="muted">Interactive payment actions are added in the next 6F step.</p>
+      <div class="mini-card">
+        <h3>Run the ALLOW scenario</h3>
+        <p>Submit the signed JK-101 payment to MockPsp. The app should capture exactly $70.00 and add a signed receipt.</p>
+        <button id="run-allow" type="button">Run ALLOW demo</button>
+        <p id="allow-result" class="muted" role="status">ALLOW demo not run yet.</p>
+        <pre id="allow-output">{}</pre>
+      </div>
+      <p id="demo-placeholder" class="muted">BLOCK and Evidence interactions are added next.</p>
     </section>
   </main>
 
@@ -129,6 +136,121 @@
     }
   }
 
+  var demoContract = {
+    id: "intent_jk101_v1",
+    family_id: "intent_jk101",
+    version: 1,
+    owner_payer_id: "payer_demo",
+    criteria: [
+      { id: "c1", type: "structured", field: "merchant_id", expected: "merchant_trailgear" }
+    ],
+    budget_max_cents: 10000,
+    per_order_cap_cents: 10000,
+    allowed_payee_ids: ["merchant_trailgear"],
+    blocked_categories: ["gift_card"],
+    expires_at: "2030-01-01T00:00:00.000Z",
+    ship_to_hash: "demo_ship_to_hash",
+    status: "ACTIVE",
+    hash: "demo_contract_hash",
+    signature: "demo_contract_signature"
+  };
+
+  function firstDefined(values) {
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] !== undefined && values[i] !== null && values[i] !== "") return values[i];
+    }
+    return "";
+  }
+
+  function buildAllowRequest() {
+    var suffix = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    return {
+      contract: demoContract,
+      payment: {
+        id: "pay_ui_allow_" + suffix,
+        contract_id: demoContract.id,
+        idempotency_key: "idem_ui_allow_" + suffix,
+        merchant_id: "merchant_trailgear",
+        merchant_order_ref: "order_UI_ALLOW_" + suffix,
+        items: [{ sku: "JK-101", qty: 1, unit_price_cents: 7000 }],
+        proposed_total_cents: 7000,
+        spans: []
+      }
+    };
+  }
+
+  async function runAllowDemo() {
+    var button = document.getElementById("run-allow");
+    var resultEl = document.getElementById("allow-result");
+    var outputEl = document.getElementById("allow-output");
+
+    button.disabled = true;
+    resultEl.textContent = "Running ALLOW demo...";
+    outputEl.textContent = "{}";
+
+    try {
+      var res = await fetch("/v1/payments/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        body: JSON.stringify(buildAllowRequest())
+      });
+
+      var result = {};
+      try {
+        result = await res.json();
+      } catch {
+        result = {};
+      }
+
+      outputEl.textContent = JSON.stringify(result, null, 2);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+
+      var decision = result.decision || {};
+      var pspResult = result.pspResult || result.psp_result || {};
+      var outcome = firstDefined([
+        decision.outcome,
+        decision.decision,
+        decision.action,
+        result.outcome,
+        "COMPLETED"
+      ]);
+      var captureId = firstDefined([
+        pspResult.capture_id,
+        pspResult.captureId,
+        pspResult.id,
+        result.capture_id,
+        "not reported"
+      ]);
+      var amountCents = Number(firstDefined([
+        pspResult.amount_cents,
+        pspResult.amountCents,
+        pspResult.captured_cents,
+        decision.computed_total_cents,
+        result.computed_total_cents,
+        7000
+      ]));
+
+      resultEl.textContent =
+        outcome +
+        " - capture " +
+        captureId +
+        " - $" +
+        (amountCents / 100).toFixed(2) +
+        ". Receipt count refreshed above.";
+
+      await loadStatus();
+    } catch (error) {
+      button.disabled = false;
+      resultEl.textContent =
+        "ALLOW demo failed: " +
+        (error && error.message ? error.message : error);
+    }
+  }
+
+  document.getElementById("run-allow").addEventListener("click", runAllowDemo);
   document.getElementById("refresh-status").addEventListener("click", loadStatus);
   loadStatus();
 </script>
