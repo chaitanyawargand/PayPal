@@ -106,7 +106,14 @@
         <p id="allow-result" class="muted" role="status">ALLOW demo not run yet.</p>
         <pre id="allow-output">{}</pre>
       </div>
-      <p id="demo-placeholder" class="muted">BLOCK and Evidence interactions are added next.</p>
+      <div class="mini-card">
+        <h3>Run the BLOCK scenario</h3>
+        <p>The merchant proposes $120.00 for JK-101 items totaling $70.00. Recourse should move $0.00 and still write a signed receipt.</p>
+        <button id="run-block" type="button">Run BLOCK demo</button>
+        <p id="block-result" class="muted" role="status">BLOCK demo not run yet.</p>
+        <pre id="block-output">{}</pre>
+      </div>
+      <p id="demo-placeholder" class="muted">Evidence interaction is added next.</p>
     </section>
   </main>
 
@@ -174,6 +181,23 @@
         merchant_order_ref: "order_UI_ALLOW_" + suffix,
         items: [{ sku: "JK-101", qty: 1, unit_price_cents: 7000 }],
         proposed_total_cents: 7000,
+        spans: []
+      }
+    };
+  }
+
+  function buildBlockRequest() {
+    var suffix = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    return {
+      contract: demoContract,
+      payment: {
+        id: "pay_ui_block_" + suffix,
+        contract_id: demoContract.id,
+        idempotency_key: "idem_ui_block_" + suffix,
+        merchant_id: "merchant_trailgear",
+        merchant_order_ref: "order_UI_BLOCK_" + suffix,
+        items: [{ sku: "JK-101", qty: 1, unit_price_cents: 7000 }],
+        proposed_total_cents: 12000,
         spans: []
       }
     };
@@ -250,7 +274,73 @@
     }
   }
 
+  async function runBlockDemo() {
+    var button = document.getElementById("run-block");
+    var resultEl = document.getElementById("block-result");
+    var outputEl = document.getElementById("block-output");
+
+    button.disabled = true;
+    resultEl.textContent = "Running BLOCK demo...";
+    outputEl.textContent = "{}";
+
+    try {
+      var res = await fetch("/v1/payments/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        body: JSON.stringify(buildBlockRequest())
+      });
+
+      var result = {};
+      try {
+        result = await res.json();
+      } catch (parseError) {
+        result = {};
+      }
+
+      outputEl.textContent = JSON.stringify(result, null, 2);
+      if (!(res.status === 200 || res.status === 422)) throw new Error("HTTP " + res.status);
+
+      var decision = result.decision || {};
+      var pspResult = result.pspResult || result.psp_result || {};
+      var reasonCodes = decision.reason_codes || decision.reasonCodes || [];
+      var moneyMovedCents = Number(firstDefined([pspResult.money_moved_cents, pspResult.moneyMovedCents, result.money_moved_cents, 0]));
+      var outcome = firstDefined([
+        decision.verdict, decision.outcome,
+        decision.decision,
+        decision.action,
+        result.outcome,
+        "BLOCK"
+      ]);
+      var reason = firstDefined([
+        decision.reason_code, Array.isArray(reasonCodes) ? reasonCodes.join(", ") : reasonCodes,
+        decision.reasonCode,
+        decision.reason,
+        result.reason_code,
+        result.reasonCode,
+        result.reason
+      ]);
+
+      resultEl.textContent =
+        outcome +
+        " - $" + (moneyMovedCents / 100).toFixed(2) + " moved" +
+        (reason ? " - reason " + reason : "") +
+        ". Signed receipt count refreshed above.";
+
+      await loadStatus();
+    } catch (error) {
+      resultEl.textContent =
+        "BLOCK demo failed: " +
+        (error && error.message ? error.message : error);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   document.getElementById("run-allow").addEventListener("click", runAllowDemo);
+  document.getElementById("run-block").addEventListener("click", runBlockDemo);
   document.getElementById("refresh-status").addEventListener("click", loadStatus);
   loadStatus();
 </script>
