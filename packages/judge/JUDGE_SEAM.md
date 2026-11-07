@@ -32,4 +32,3 @@ The Judge exports:
 - `applyTightening(det, judge)`: Pure monotonic tightening function (`ALLOW < STEP_UP < BLOCK`). Final is **never looser** than deterministic.
 - Grounded quote verification with `indexOf` + 80-char negation window check.
 - Injected client dependency injection: Zero hardcoded secrets, full testability without network.
-

@@ -232,4 +232,3 @@ describe("packages/judge - Sealed Blind Evaluation (Phase 6E)", () => {
     expect(postHash).toBe("55CDC9F4B32D3CB63F0DDB79DC67F74498F70530AE00C95B8ABB45769C06E51D");
   });
 });
-

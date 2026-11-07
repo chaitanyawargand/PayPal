@@ -58,4 +58,3 @@ Recourse does **not** rely on probabilistic AI to safeguard financial transactio
 1. **Deterministic code always commands the authorization threshold** (budget caps, item sums, merchant allowlists, signature chains).
 2. **AI can only tighten** (`ALLOW` $\to$ `STEP_UP` $\to$ `BLOCK`), **never loosen**.
 3. **Fail-Closed Principle:** When evidence is missing, contradictory, or ambiguous, money does not move.
-

@@ -104,4 +104,3 @@ export function verifyEvidencePack(pack: unknown): EvidenceVerifyResult {
     };
   }
 }
-

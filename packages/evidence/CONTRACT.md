@@ -31,4 +31,3 @@ export interface EvidencePack {
 - **Recomputation**: Recomputes the entire receipt hash chain from genesis (`"0".repeat(64)`) and validates all Ed25519 digital signatures using `verifySignedReceipts`.
 - **Fail-Closed**: Always returns a structured object matching Contract 1 without throwing.
 - **Zero Dependencies on DB**: Operates without SQLite, databases, or network connections.
-

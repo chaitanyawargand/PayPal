@@ -15,4 +15,3 @@ Conforms strictly to **Phase 6 Contract 1**.
   - Recomputes SHA-256 hash chaining using canonical JSON serialization from genesis.
   - Verifies Ed25519 digital signatures on each receipt hash against the pack's public key.
   - Fail-closed: Never throws on corrupt or forged inputs.
-
