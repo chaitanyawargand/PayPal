@@ -17,4 +17,3 @@ export interface EvidenceVerifyResult {
   checks: EvidenceVerifyChecks;
   failures: string[];
 }
-

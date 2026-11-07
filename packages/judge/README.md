@@ -14,4 +14,3 @@ Conforms strictly to **Phase 6 Contract 2**.
   - Timeouts, missing API keys, model hallucination, schema parsing failure all default to `STEP_UP`.
 - **Zero Secrets**:
   - Gemini client injected via dependency injection; zero hardcoded secrets or environment reading in library code.
-

@@ -25,4 +25,3 @@ export function applyTightening(det: Verdict, judge: Verdict): Verdict {
   const finalRank = Math.max(detRank, judgeRank);
   return RANK_TO_VERDICT[finalRank] ?? "BLOCK";
 }
-

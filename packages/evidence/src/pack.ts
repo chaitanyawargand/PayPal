@@ -29,4 +29,3 @@ export function buildEvidencePack(options: BuildEvidencePackOptions): EvidencePa
     created_at: options.createdAt ?? new Date().toISOString(),
   };
 }
-

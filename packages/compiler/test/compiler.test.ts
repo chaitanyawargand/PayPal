@@ -116,4 +116,3 @@ describe("packages/compiler - Draft Contract Compiler", () => {
     }
   });
 });
-

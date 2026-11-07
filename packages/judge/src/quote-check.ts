@@ -62,4 +62,3 @@ export function checkGroundedQuote(
 
   return { valid: true };
 }
-

@@ -36,4 +36,3 @@ export interface CompilerInput {
   expires_at?: string;
   [key: string]: unknown;
 }
-

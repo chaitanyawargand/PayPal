@@ -1,4 +1,4 @@
-export type ActorType = "AGENT" | "GATEWAY" | "JUDGE" | "HUMAN" | "SYSTEM";
+export type ActorType = "AGENT" | "GATEWAY" | "JUDGE" | "AI SAFETY REVIEW" | "HUMAN" | "SYSTEM";
 
 export interface TimelineEvent {
   id: string;

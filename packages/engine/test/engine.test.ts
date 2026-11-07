@@ -21,6 +21,7 @@ const makePayment = (overrides: any = {}) =>
     items: [{ sku: "JK-101", qty: 1, unit_price_cents: 7000 }],
     proposed_total_cents: 7000,
     spans: [],
+
     ...overrides,
   }) as any;
 

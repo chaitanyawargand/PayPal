@@ -102,4 +102,3 @@ Verbatim Evidence Text:
     }
   }
 }
-

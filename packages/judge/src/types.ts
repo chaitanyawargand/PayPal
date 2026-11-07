@@ -32,4 +32,3 @@ export interface JudgeEvaluationResult {
 export interface GeminiClient {
   generateContent(prompt: string): Promise<string>;
 }
-

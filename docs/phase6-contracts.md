@@ -81,4 +81,3 @@ export interface CompileDraftResult {
 - The `draft` object must contain **no `signature` field, ever**. Tests assert this.
 - If merchant, price, caps, or requirements are ambiguous or missing, status must be `"NEEDS_CLARIFICATION"` with informative warnings, never an unverified guess.
 - Integer cents only for all monetary amounts (no floats).
-
