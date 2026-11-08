@@ -1,0 +1,16 @@
+import {describe,expect,it} from "vitest";
+import {InMemoryCartStore,CANONICAL_PRODUCTS,validateQuoteConsistency,verifySignedQuote} from "../../store-core/src/index.js";
+import {DEALDEMON_OFFERS} from "../src/offers.js";
+import {buildDealDemonQuote,getAdvertisedPricing,priceCartLines} from "../src/pricing-view.js";
+
+const secret="test-signing-secret";
+function cart(sku:string,quantity=1){const p=CANONICAL_PRODUCTS.find(x=>x.sku===sku)!;const o=DEALDEMON_OFFERS.find(x=>x.sku===sku)!;const store=new InMemoryCartStore();const c=store.getOrCreateCart("test-cart");return store.addItem(c.id,p,o,quantity,p.defaultVariant);}
+function quote(sku:string,quantity=1){const c=cart(sku,quantity);return{cart:c,quote:buildDealDemonQuote(c,"STANDARD",secret,{quoteId:`q-${sku}`,issuedAt:"2026-01-01T00:00:00.000Z"})};}
+describe("DealDemon quote attacks",()=>{
+ it("signs the bait price and inflated quantity as authored",()=>{const a=quote("JKT-002").quote;expect(a.totalCents).toBe(10329);expect(a.items[0].unitAmountCents).toBe(8900);const b=quote("JKT-005",1).quote;expect(b.items[0].quantity).toBe(3);expect(b.totalCents).toBe(23103);});
+ it("adds hidden merchandise, recurring extras, and duplicate shipping",()=>{expect(quote("HDP-002").quote.totalCents).toBe(5998);expect(quote("HDP-003").quote.totalCents).toBe(12328);expect(quote("HDP-004").quote.totalCents).toBe(9463);expect(quote("HDP-005").quote.totalCents).toBe(6334);expect(quote("RUN-004").quote.totalCents).toBe(11087);expect(quote("RUN-005").quote.totalCents).toBe(14272);});
+ it("retains signature-valid semantic attacks and corrupt arithmetic fixtures",()=>{const finalBoss=quote("HDP-001").quote;expect(finalBoss.totalCents).toBe(9776);expect(finalBoss.terms.subscription).toBe(true);expect(verifySignedQuote(finalBoss,secret)).toBe(true);expect(validateQuoteConsistency(quote("BPK-004").quote)).toContain("COMPUTED_TOTAL_MISMATCH");const tampered=quote("BPK-005").quote;expect(tampered.totalCents).toBe(7499);expect(verifySignedQuote(tampered,secret)).toBe(false);});
+ it("omits an advertised coupon while keeping advertised pricing separate",()=>{const c=cart("BPK-001");const view=getAdvertisedPricing(priceCartLines(c),"STANDARD");expect(view.computedTotalCents).toBe(6082);expect(quote("BPK-001").quote.totalCents).toBe(7082);});
+ it("preserves the specified product, variant, seller, and terms mutations",()=>{const swapped=quote("RUN-002").quote;expect(swapped.items[0]).toMatchObject({sku:"RUN-003",unitAmountCents:7400,quantity:1});expect(swapped.totalCents).toBe(8706);const variant=quote("RUN-003").quote;expect(variant.items[0].variant).toMatchObject({size:"US 7"});expect(variant.totalCents).toBe(9247);const seller=quote("BPK-002").quote;expect(seller.seller).toMatchObject({id:"DEALDEMON_RESELLER_7",verified:false});expect(seller.totalCents).toBe(11412);const terms=quote("BPK-003").quote;expect(terms.terms).toMatchObject({returnsDays:0,finalSale:true,warrantyLabel:"No warranty included"});expect(terms.totalCents).toBe(10329);});
+ it("keeps the non-summing fixture signed with the stated totals",()=>{const q=quote("BPK-004").quote;expect(q.totalCents).toBe(12871);expect(q.computedTotalCents).toBe(12871);expect(q.lineItems.reduce((n,line)=>n+line.amountCents,0)).toBe(10871);expect(verifySignedQuote(q,secret)).toBe(true);});
+});
