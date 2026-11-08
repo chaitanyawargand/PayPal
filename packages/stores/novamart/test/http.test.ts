@@ -98,6 +98,13 @@ describe("NovaMart HTTP API", () => {
     expect(data.hiddenContent).toEqual([]);
     expect(data.reviews.length).toBeGreaterThanOrEqual(3);
   });
+  it("includes advertised terms for every product detail response", async () => {
+    for (const product of CANONICAL_PRODUCTS) {
+      const { response, data } = await json(`/api/products/${product.sku}`);
+      expect(response.status).toBe(200);
+      expect(data.advertisedTerms).toMatchObject({ subscription: false, giftCard: false });
+    }
+  });
   it("returns 404 for an unknown product SKU", async () => {
     const { response, data } = await json("/api/products/not-a-product");
     expect(response.status).toBe(404);

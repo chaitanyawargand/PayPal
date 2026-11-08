@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { verifySignedQuote } from "../../store-core/src/index.js";
+import { CANONICAL_PRODUCTS, verifySignedQuote } from "../../store-core/src/index.js";
 import { NovaMartServiceError, NovaMartStorefront } from "../src/storefront.js";
 
 describe("NovaMart storefront service", () => {
@@ -32,6 +32,25 @@ describe("NovaMart storefront service", () => {
     expect(quote.terms.subscription).toBe(false);
     expect(quote.terms.giftCard).toBe(false);
     expect(quote.totalCents).toBe(6774);
+  });
+  it("advertises add-on terms for every product and matches each signed quote", () => {
+    const store = new NovaMartStorefront("test-secret");
+    for (const product of CANONICAL_PRODUCTS) {
+      const detail = store.productDetail(product.sku)!;
+      expect(detail.advertisedTerms).toEqual({
+        condition: detail.offer.condition,
+        returnsDays: detail.offer.returnsDays,
+        finalSale: detail.offer.finalSale,
+        subscription: false,
+        giftCard: false,
+        warrantyLabel: detail.offer.warrantyLabel,
+      });
+      const cart = store.getCart(`terms-${product.sku}`);
+      store.addCartItem(cart.id, product.sku, 1);
+      const quote = store.createQuote(cart.id);
+      expect(detail.advertisedTerms.subscription).toBe(quote.terms.subscription);
+      expect(detail.advertisedTerms.giftCard).toBe(quote.terms.giftCard);
+    }
   });
   it("detects quote tampering with both the total and a line amount", () => {
     const store = new NovaMartStorefront("test-secret");

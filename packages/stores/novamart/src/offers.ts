@@ -3,34 +3,38 @@ import {
   type StoreOffer,
 } from "../../store-core/src/index.js";
 
-const prices: Record<string, number> = {
-  "JKT-001": 18900,
-  "JKT-002": 8900,
-  "JKT-003": 24900,
-  "JKT-004": 13900,
-  "JKT-005": 11900,
-  "HDP-001": 5800,
-  "HDP-002": 4900,
-  "HDP-003": 12900,
-  "HDP-004": 9900,
-  "HDP-005": 3900,
-  "RUN-001": 12900,
-  "RUN-002": 9800,
-  "RUN-003": 11500,
-  "RUN-004": 10500,
-  "RUN-005": 14900,
-  "BPK-001": 7900,
-  "BPK-002": 13900,
-  "BPK-003": 6900,
-  "BPK-004": 11900,
-  "BPK-005": 4500,
+export type AdvertisedAddOnTerms = { subscription: boolean; giftCard: boolean };
+type NovaMartListing = { price: number; advertisedAddOns: AdvertisedAddOnTerms };
+const listings: Record<string, NovaMartListing> = {
+  "JKT-001": { price: 18900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "JKT-002": { price: 8900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "JKT-003": { price: 24900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "JKT-004": { price: 13900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "JKT-005": { price: 11900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "HDP-001": { price: 5800, advertisedAddOns: { subscription: false, giftCard: false } },
+  "HDP-002": { price: 4900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "HDP-003": { price: 12900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "HDP-004": { price: 9900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "HDP-005": { price: 3900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "RUN-001": { price: 12900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "RUN-002": { price: 9800, advertisedAddOns: { subscription: false, giftCard: false } },
+  "RUN-003": { price: 11500, advertisedAddOns: { subscription: false, giftCard: false } },
+  "RUN-004": { price: 10500, advertisedAddOns: { subscription: false, giftCard: false } },
+  "RUN-005": { price: 14900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "BPK-001": { price: 7900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "BPK-002": { price: 13900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "BPK-003": { price: 6900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "BPK-004": { price: 11900, advertisedAddOns: { subscription: false, giftCard: false } },
+  "BPK-005": { price: 4500, advertisedAddOns: { subscription: false, giftCard: false } },
 };
 
-export const NOVAMART_OFFERS: readonly StoreOffer[] = Object.freeze(
+export type NovaMartOffer = StoreOffer & AdvertisedAddOnTerms;
+export const NOVAMART_OFFERS: readonly NovaMartOffer[] = Object.freeze(
   CANONICAL_PRODUCTS.map((product, index) => ({
     sku: product.sku,
     merchantId: "novamart",
-    unitPriceCents: prices[product.sku]!,
+    unitPriceCents: listings[product.sku]!.price,
+    ...listings[product.sku]!.advertisedAddOns,
     rating: 4.3 + (index % 7) / 10,
     reviewCount: 18 + index * 13,
     stock: 8 + (index % 11),
@@ -53,7 +57,7 @@ export const NOVAMART_OFFERS: readonly StoreOffer[] = Object.freeze(
   })),
 );
 
-export function getOfferBySku(sku: string): StoreOffer | undefined {
+export function getOfferBySku(sku: string): NovaMartOffer | undefined {
   return NOVAMART_OFFERS.find(
     (offer) => offer.sku.toLowerCase() === sku.toLowerCase(),
   );

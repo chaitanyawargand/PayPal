@@ -84,9 +84,18 @@ export class NovaMartStorefront {
     const product = findProduct(sku);
     if (!product) return null;
     const offer = getOfferBySku(product.sku)!;
+    const { subscription, giftCard, ...publicOffer } = offer;
     return {
       ...product,
-      offer,
+      offer: publicOffer,
+      advertisedTerms: {
+        condition: offer.condition,
+        returnsDays: offer.returnsDays,
+        finalSale: offer.finalSale,
+        subscription,
+        giftCard,
+        warrantyLabel: offer.warrantyLabel,
+      },
       variants: product.variantOptions,
       seller: offer.seller,
       shipping: {
@@ -205,8 +214,8 @@ export class NovaMartStorefront {
           condition: "NEW",
           returnsDays: 30,
           finalSale: false,
-          subscription: false,
-          giftCard: false,
+          subscription: products.some(({ offer }) => offer.subscription),
+          giftCard: products.some(({ offer }) => offer.giftCard),
           warrantyLabel: firstOffer.warrantyLabel,
         },
       },
