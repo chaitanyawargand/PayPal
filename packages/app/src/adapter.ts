@@ -357,7 +357,7 @@ export class DataAdapter {
       throw new Error("Contract limits need clarification");
     }
 
-    const shipToHash = createHash("sha256").update("phase7-ship-to-hash", "utf8").digest("hex");
+    const shipToHash = createHash("sha256").update("phase7-ship-to-not-collected", "utf8").digest("hex");
     const contract = signIntentDraft({
       draft: compiled.draft,
       shipToHash,

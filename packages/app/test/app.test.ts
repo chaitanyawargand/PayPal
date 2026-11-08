@@ -234,6 +234,20 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       // Run returns to AWAITING_SELECTION so user can pick next candidate
       expect(result.run.status).toBe("AWAITING_SELECTION");
     });
+
+    it("supports canonical /api/phase7/runs route shapes", async () => {
+      const discRes = await fetch(`${baseUrl}/api/phase7/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "headphones" }),
+      });
+      expect(discRes.status).toBe(200);
+      const { run } = await discRes.json();
+      expect(run.id).toBeDefined();
+
+      const snapRes = await fetch(`${baseUrl}/api/phase7/runs/${run.id}`);
+      expect(snapRes.status).toBe(200);
+    });
   });
 
   describe("STEP_UP Workflow (PeerMarket Final Sale & Human Approval/Rejection)", () => {

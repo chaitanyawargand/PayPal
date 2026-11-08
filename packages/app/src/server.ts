@@ -129,7 +129,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       }
 
       // 2. Real Phase 7 discovery flow
-      if (pathname === "/api/discovery/start" && method === "POST") {
+      if ((pathname === "/api/discovery/start" || pathname === "/api/phase7/runs") && method === "POST") {
         const body = await parseJsonBody<{ prompt: string }>(req);
         if (!body.prompt || typeof body.prompt !== "string") {
           return sendJson(res, 400, { error: "prompt is required" });
@@ -139,7 +139,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       }
 
       // 3. Candidate selection
-      const selectMatch = pathname.match(/^\/api\/run\/([^/]+)\/select$/);
+      const selectMatch = pathname.match(/^\/api\/(?:run|phase7\/runs)\/([^/]+)\/select$/);
       if (selectMatch && method === "POST") {
         const runId = decodeURIComponent(selectMatch[1]!);
         const body = await parseJsonBody<{ candidateId: string }>(req);
@@ -151,7 +151,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       }
 
       // 4. Compile and sign contract via host bridge
-      const signMatch = pathname.match(/^\/api\/run\/([^/]+)\/sign$/);
+      const signMatch = pathname.match(/^\/api\/(?:run|phase7\/runs)\/([^/]+)\/(?:sign|sign-and-submit)$/);
       if (signMatch && method === "POST") {
         const runId = decodeURIComponent(signMatch[1]!);
         const body = await parseJsonBody<{
@@ -182,7 +182,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       }
 
       // 5. STEP_UP decision (APPROVE or REJECT)
-      const stepUpMatch = pathname.match(/^\/api\/run\/([^/]+)\/step-up$/);
+      const stepUpMatch = pathname.match(/^\/api\/(?:run|phase7\/runs)\/([^/]+)\/step-up$/);
       if (stepUpMatch && method === "POST") {
         const runId = decodeURIComponent(stepUpMatch[1]!);
         const body = await parseJsonBody<{ decision?: "APPROVE" | "REJECT"; approved?: boolean }>(req);
@@ -198,7 +198,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       }
 
       // 6. Run event polling with afterSeq
-      const eventsMatch = pathname.match(/^\/api\/run\/([^/]+)\/events$/);
+      const eventsMatch = pathname.match(/^\/api\/(?:run|phase7\/runs)\/([^/]+)\/events$/);
       if (eventsMatch && method === "GET") {
         const runId = decodeURIComponent(eventsMatch[1]!);
         const rawSeq = parsedUrl.searchParams.get("afterSeq");
@@ -208,7 +208,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       }
 
       // 7. Get run snapshot
-      const runMatch = pathname.match(/^\/api\/run\/([^/]+)$/);
+      const runMatch = pathname.match(/^\/api\/(?:run|phase7\/runs)\/([^/]+)$/);
       if (runMatch && method === "GET") {
         const runId = decodeURIComponent(runMatch[1]!);
         try {
