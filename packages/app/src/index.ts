@@ -1,5 +1,4 @@
 export * from "./types.js";
-export * from "./fixtures.js";
 export * from "./adapter.js";
 export * from "./server.js";
 

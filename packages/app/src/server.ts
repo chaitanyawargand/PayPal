@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DataAdapter } from "./adapter.js";
-import type { SpendingContractDraft, AttackPlanted } from "./types.js";
+import type { SpendingContractInput, PlantedAttack } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,7 +49,7 @@ function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
       }
       try {
         resolve(JSON.parse(raw));
-      } catch (err) {
+      } catch {
         reject(new Error("Invalid JSON body"));
       }
     });
@@ -112,7 +112,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
     const method = req.method?.toUpperCase();
 
     try {
-      // API Routes
+      // 1. Status endpoints
       if (pathname === "/api/status" && method === "GET") {
         const status = await adapter.getStatus();
         return sendJson(res, 200, status);
@@ -128,64 +128,117 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
         return sendJson(res, 400, { error: "status must be 'CONNECTED' or 'UNAVAILABLE'" });
       }
 
-      if (pathname === "/api/contract/draft" && method === "POST") {
+      // 2. Real Phase 7 discovery flow
+      if (pathname === "/api/discovery/start" && method === "POST") {
         const body = await parseJsonBody<{ prompt: string }>(req);
-        const draft = await adapter.draftContract(body.prompt || "");
-        return sendJson(res, 200, draft);
-      }
-
-      if (pathname === "/api/contract/sign" && method === "POST") {
-        const body = await parseJsonBody<{ draft: SpendingContractDraft }>(req);
-        if (!body.draft) {
-          return sendJson(res, 400, { error: "Missing draft" });
+        if (!body.prompt || typeof body.prompt !== "string") {
+          return sendJson(res, 400, { error: "prompt is required" });
         }
-        const signed = await adapter.signContract(body.draft);
-        return sendJson(res, 200, signed);
+        const result = await adapter.startDiscovery(body.prompt);
+        return sendJson(res, 200, result);
       }
 
-      if (pathname === "/api/run/start" && method === "POST") {
-        const body = await parseJsonBody<{ prompt: string; contract: SpendingContractDraft }>(req);
-        if (!body.prompt || !body.contract) {
-          return sendJson(res, 400, { error: "Missing prompt or contract" });
+      // 3. Candidate selection
+      const selectMatch = pathname.match(/^\/api\/run\/([^/]+)\/select$/);
+      if (selectMatch && method === "POST") {
+        const runId = decodeURIComponent(selectMatch[1]!);
+        const body = await parseJsonBody<{ candidateId: string }>(req);
+        if (!body.candidateId || typeof body.candidateId !== "string") {
+          return sendJson(res, 400, { error: "candidateId is required" });
         }
-        const run = await adapter.startRun(body.prompt, body.contract);
-        return sendJson(res, 200, run);
+        const result = adapter.selectCandidate(runId, body.candidateId);
+        return sendJson(res, 200, result);
       }
 
-      if (pathname.startsWith("/api/run/") && pathname.endsWith("/step-up") && method === "POST") {
-        const parts = pathname.split("/");
-        // /api/run/:id/step-up
-        const runId = parts[3];
-        const body = await parseJsonBody<{ candidateId: string; approved: boolean }>(req);
-        if (!candidateIdValid(body.candidateId) || typeof body.approved !== "boolean") {
-          return sendJson(res, 400, { error: "Missing candidateId or valid approved flag" });
+      // 4. Compile and sign contract via host bridge
+      const signMatch = pathname.match(/^\/api\/run\/([^/]+)\/sign$/);
+      if (signMatch && method === "POST") {
+        const runId = decodeURIComponent(signMatch[1]!);
+        const body = await parseJsonBody<{
+          limits?: SpendingContractInput;
+          maxBudgetCents?: number;
+          perOrderCapCents?: number;
+          maxQuantity?: number;
+          noSubscriptions?: boolean;
+          noGiftCards?: boolean;
+          unverifiedSellerRule?: "ASK_ME" | "BLOCK";
+          allowedPayees?: string[];
+          expiryMinutes?: number;
+        }>(req);
+
+        const limits: SpendingContractInput = body.limits ?? {
+          maxBudgetCents: body.maxBudgetCents ?? 7000,
+          perOrderCapCents: body.perOrderCapCents,
+          maxQuantity: body.maxQuantity,
+          noSubscriptions: body.noSubscriptions,
+          noGiftCards: body.noGiftCards,
+          unverifiedSellerRule: body.unverifiedSellerRule,
+          allowedPayees: body.allowedPayees,
+          expiryMinutes: body.expiryMinutes,
+        };
+
+        const result = await adapter.compileAndSign(runId, limits);
+        return sendJson(res, 200, result);
+      }
+
+      // 5. STEP_UP decision (APPROVE or REJECT)
+      const stepUpMatch = pathname.match(/^\/api\/run\/([^/]+)\/step-up$/);
+      if (stepUpMatch && method === "POST") {
+        const runId = decodeURIComponent(stepUpMatch[1]!);
+        const body = await parseJsonBody<{ decision?: "APPROVE" | "REJECT"; approved?: boolean }>(req);
+        const decision: "APPROVE" | "REJECT" =
+          body.decision === "APPROVE" || body.decision === "REJECT"
+            ? body.decision
+            : body.approved === true
+              ? "APPROVE"
+              : "REJECT";
+
+        const result = await adapter.decideStepUp(runId, decision);
+        return sendJson(res, 200, result);
+      }
+
+      // 6. Run event polling with afterSeq
+      const eventsMatch = pathname.match(/^\/api\/run\/([^/]+)\/events$/);
+      if (eventsMatch && method === "GET") {
+        const runId = decodeURIComponent(eventsMatch[1]!);
+        const rawSeq = parsedUrl.searchParams.get("afterSeq");
+        const afterSeq = rawSeq !== null ? parseInt(rawSeq, 10) || 0 : 0;
+        const events = adapter.getEvents(runId, afterSeq);
+        return sendJson(res, 200, { events });
+      }
+
+      // 7. Get run snapshot
+      const runMatch = pathname.match(/^\/api\/run\/([^/]+)$/);
+      if (runMatch && method === "GET") {
+        const runId = decodeURIComponent(runMatch[1]!);
+        try {
+          const snapshot = adapter.getRun(runId);
+          return sendJson(res, 200, snapshot);
+        } catch {
+          return sendJson(res, 404, { error: `Run '${runId}' not found` });
         }
-        const updatedRun = await adapter.stepUpDecision(runId, body.candidateId, body.approved);
-        return sendJson(res, 200, updatedRun);
       }
 
-      if (pathname.startsWith("/api/run/") && method === "GET") {
-        const runId = pathname.replace("/api/run/", "");
-        const run = await adapter.getRun(runId);
-        if (!run) {
-          return sendJson(res, 404, { error: `Run ${runId} not found` });
-        }
-        return sendJson(res, 200, run);
-      }
-
+      // 8. Attack lab
       if (pathname === "/api/attack/plant" && method === "POST") {
-        const body = await parseJsonBody<AttackPlanted>(req);
+        const body = await parseJsonBody<PlantedAttack>(req);
         if (!body.storeId || !body.productSku || !body.instruction) {
-          return sendJson(res, 400, { error: "Invalid attack specification" });
+          return sendJson(res, 400, { error: "storeId, productSku, and instruction are required" });
         }
         const result = await adapter.plantAttack(body);
         return sendJson(res, 200, result);
       }
 
+      if (pathname === "/api/attack/planted" && method === "GET") {
+        const attack = adapter.getPlantedAttack();
+        return sendJson(res, 200, { attack });
+      }
+
+      // 9. Evidence verification
       if (pathname === "/api/evidence/verify" && method === "POST") {
         const body = await parseJsonBody<{ receiptId: string }>(req);
         if (!body.receiptId) {
-          return sendJson(res, 400, { error: "Missing receiptId" });
+          return sendJson(res, 400, { error: "receiptId is required" });
         }
         const result = await adapter.verifyEvidence(body.receiptId);
         return sendJson(res, 200, result);
@@ -215,14 +268,14 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
         adapter,
         close: () =>
           new Promise<void>((resClose) => {
+            try {
+              adapter.close();
+            } catch {
+              // ignore
+            }
             server.close(() => resClose());
           }),
       });
     });
   });
 }
-
-function candidateIdValid(id: any): id is string {
-  return typeof id === "string" && id.length > 0;
-}
-

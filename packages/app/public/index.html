@@ -309,6 +309,40 @@
               </div>
             </div>
 
+            <!-- Inline Contract Review & Sign Panel (Awaiting Signature) -->
+            <div id="inline-sign-panel" class="stepup-dialog-card" style="display: none; border-color: #3b82f6; margin-bottom: 20px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h3 style="font-size: 16px; font-weight: 800; color: #60a5fa;">✍ Human Authorization Required</h3>
+                <span class="brand-badge" style="background: rgba(59, 130, 246, 0.2); color: #93c5fd;">Awaiting Signature</span>
+              </div>
+              <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">
+                You have selected a candidate. Review bounds and sign your spending contract through the host bridge. Private keys remain strictly on the host.
+              </p>
+              <div style="background: #0d131f; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 12px; font-size: 13px; margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                  <span style="color: var(--text-secondary);">Selected Candidate:</span>
+                  <strong id="sign-cand-title">--</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                  <span style="color: var(--text-secondary);">Merchant:</span>
+                  <strong id="sign-cand-merchant">--</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                  <span style="color: var(--text-secondary);">Quoted Total:</span>
+                  <strong id="sign-cand-total" style="color: #38bdf8; font-family: var(--font-mono);">$0.00</strong>
+                </div>
+                <div style="display: flex; gap: 12px; margin-top: 10px; align-items: center;">
+                  <label for="sign-max-dollars" style="color: var(--text-secondary); font-size: 12px;">Max Budget ($ USD):</label>
+                  <input type="number" id="sign-max-dollars" class="form-input" style="width: 100px; padding: 4px 8px;" step="0.01" min="1" value="70.00">
+                </div>
+              </div>
+              <div class="stepup-actions-row">
+                <button type="button" id="btn-inline-sign" class="btn-primary" style="background: #2563eb;">
+                  ✍ Sign Contract &amp; Authorize Gateway Execution ➔
+                </button>
+              </div>
+            </div>
+
             <!-- STEP_UP Human Intervention Modal (shown when status === PAUSED_STEP_UP) -->
             <div id="stepup-intervene-panel" class="stepup-dialog-card" style="display: none;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -356,10 +390,10 @@
                 Final Payment Execution Result
               </div>
               <div id="payment-result-amount" class="giant-captured-amount" style="color: #10b981; margin-bottom: 8px;">
-                $59.00 CAPTURED
+                $0.00 CAPTURED
               </div>
               <div id="payment-result-details" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px;">
-                Store: NovaMart Official | Mode: Mock PSP | Transaction: capture_4MN63191YV
+                --
               </div>
               <button id="btn-view-evidence-from-run" class="btn-secondary">
                 Inspect Signed Cryptographic Evidence ➔
@@ -527,8 +561,8 @@
               <div class="cap-row"><span class="cap-label">Payment ID:</span><span class="cap-val" id="ev-payment-id">pay_demo_sa_001</span></div>
               <div class="cap-row"><span class="cap-label">Contract ID:</span><span class="cap-val" id="ev-contract-id">ct_draft_headphones_01</span></div>
               <div class="cap-row"><span class="cap-label">Merchant:</span><span class="cap-val" id="ev-merchant-id">novamart</span></div>
-              <div class="cap-row"><span class="cap-label">Verdict:</span><span class="cap-val" style="color: #10b981;">ALLOW</span></div>
-              <div class="cap-row"><span class="cap-label">Money Moved:</span><span class="cap-val" style="color: #10b981;">$59.00 (5900¢)</span></div>
+              <div class="cap-row"><span class="cap-label">Verdict:</span><span class="cap-val" id="ev-verdict" style="color: #10b981;">ALLOW</span></div>
+              <div class="cap-row"><span class="cap-label">Money Moved:</span><span class="cap-val" id="ev-money-moved" style="color: #10b981;">--</span></div>
             </div>
           </div>
 
