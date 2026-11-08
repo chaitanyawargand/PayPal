@@ -1,0 +1,23 @@
+const notes:Record<string,readonly [string,string]>={
+ "JKT-001":["Small rub mark inside the left cuff; all snaps close securely.","Opened but unworn; hang tag detached and original packaging is missing."],
+ "JKT-002":["Light wear at the sleeve ends from two rainy seasons.","Water-resistant finish was refreshed after washing; packs into its own pocket."],
+ "JKT-003":["Insulation loft is even, with faint surface wear near one pocket.","All six pockets and zippers were checked; no retail box included."],
+ "JKT-004":["Reflective trim is intact with a few small commuter scuffs.","Jacket was laundered and the zipper and cuffs were inspected."],
+ "JKT-005":["Fleece lining is clean; slight pilling at the inner hem.","Stretch panels rebound evenly and both pocket zippers work."],
+ "HDP-001":["Light scratches on the charging case; ear cups cleaned and inspected.","Battery tested at about 38 hours; includes USB-C cable, no retail box."],
+ "HDP-002":["Earbuds were cleaned and both charging contacts tested.","Case has a small corner scuff; replacement tips are included, retail carton is not."],
+ "HDP-003":["40mm drivers tested on both channels with no crackle.","Headband padding has light wear; detachable cable is included, no retail box."],
+ "HDP-004":["Noise cancellation and folding hinges were tested before listing.","Travel case has a surface mark; headphones show ordinary light handling wear."],
+ "HDP-005":["Both ear hooks and the IPX5-rated controls were checked.","Charging case has light scratches; USB cable included, original box missing."],
+ "RUN-001":["Waterproof membrane was inspected and both 5mm lug soles have even wear.","Uppers are clean after laundering; light marks remain on the midsoles."],
+ "RUN-002":["Engineered mesh has no tears; cushioning compresses evenly.","Outsoles show light heel wear from short runs; no original box."],
+ "RUN-003":["Rock plate feels intact and the aggressive tread still has depth.","Small scuff at the toe; laces and both insoles are included."],
+ "RUN-004":["Max-cushion midsoles rebound evenly with light outsole wear.","Wide base is unmarked; shoes were cleaned and ship without retail packaging."],
+ "RUN-005":["Carbon plate inspected with no visible cracks; race foam has light wear.","Laces are original and secure; small cosmetic mark on the right heel."],
+ "BPK-001":["Padded 16-inch laptop sleeve and luggage strap are intact.","Light abrasion on the base; interior cleaned and all zippers tested."],
+ "BPK-002":["Hip belt and shoe compartment are present; carry-on dimensions checked.","Small mark inside the main compartment; straps and buckles work correctly."],
+ "BPK-003":["Lockable zips and RFID pocket tested; no lock is included.","Minor scuff on one corner; interior is clean and ready to use."],
+ "BPK-004":["Welded seams inspected with no visible separation; roll-top buckle works.","Light surface wear at the base; pack was air-dried before listing."],
+ "BPK-005":["14-inch laptop sleeve is intact and recycled-fabric shell is clean.","Small pull on the side pocket stitching; main compartment zipper works."],
+};
+export function getListingNotesForSku(sku:string):string[]{return [...(notes[sku.toUpperCase()]??[])];}

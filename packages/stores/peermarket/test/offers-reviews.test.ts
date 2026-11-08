@@ -1,0 +1,26 @@
+import {describe,expect,it} from "vitest";
+import {CANONICAL_PRODUCTS} from "../../store-core/src/index.js";
+import {PEERMARKET_OFFERS,PEERMARKET_SELLERS,getPeerRiskFacts,conditionLabel} from "../src/offers.js";
+import {getListingNotesForSku} from "../src/listing-notes.js";
+import {getReviewsForSku} from "../src/reviews.js";
+
+const expected:Record<string,[number,string,string]>={"JKT-001":[13900,"OPEN_BOX","SEL-NORTHLOOP"],"JKT-002":[5900,"USED_GOOD","SEL-CLOSETSWAP"],"JKT-003":[17900,"USED_LIKE_NEW","SEL-GEARAGAIN"],"JKT-004":[8900,"OPEN_BOX","SEL-CLOSETSWAP"],"JKT-005":[7900,"USED_GOOD","SEL-NORTHLOOP"],"HDP-001":[3900,"USED_GOOD","SEL-TECHTURNOVER"],"HDP-002":[2900,"OPEN_BOX","SEL-BUDGETFINDS"],"HDP-003":[7900,"USED_LIKE_NEW","SEL-TECHTURNOVER"],"HDP-004":[6400,"USED_GOOD","SEL-BUDGETFINDS"],"HDP-005":[2400,"OPEN_BOX","SEL-TECHTURNOVER"],"RUN-001":[7900,"USED_GOOD","SEL-SECONDSTRIDE"],"RUN-002":[6400,"USED_LIKE_NEW","SEL-SECONDSTRIDE"],"RUN-003":[6900,"OPEN_BOX","SEL-GEARAGAIN"],"RUN-004":[6900,"USED_GOOD","SEL-SECONDSTRIDE"],"RUN-005":[9900,"OPEN_BOX","SEL-URBANGARAGE"],"BPK-001":[4900,"USED_LIKE_NEW","SEL-PACKANDPOST"],"BPK-002":[8900,"USED_GOOD","SEL-GEARAGAIN"],"BPK-003":[4400,"OPEN_BOX","SEL-URBANGARAGE"],"BPK-004":[7900,"USED_GOOD","SEL-PACKANDPOST"],"BPK-005":[2900,"USED_LIKE_NEW","SEL-CLOSETSWAP"]};
+describe("PeerMarket offers",()=>{
+ it("has exactly one offer for every canonical product",()=>{expect(PEERMARKET_OFFERS).toHaveLength(20);expect(new Set(PEERMARKET_OFFERS.map(o=>o.sku)).size).toBe(20);expect(PEERMARKET_OFFERS.map(o=>o.sku).sort()).toEqual(CANONICAL_PRODUCTS.map(p=>p.sku).sort());});
+ it("matches every specified price, condition, and seller",()=>{for(const offer of PEERMARKET_OFFERS){expect([offer.unitPriceCents,offer.condition,offer.seller.id]).toEqual(expected[offer.sku]);}});
+ it("has exactly eight named unverified sellers with age and location facts",()=>{expect(PEERMARKET_SELLERS).toHaveLength(8);for(const seller of PEERMARKET_SELLERS){expect(seller.verified).toBe(false);expect(seller.rating).toBeDefined();expect(seller.accountAgeLabel).toBeTruthy();expect(seller.location).toBeTruthy();}});
+ it("keeps all sales final, without warranty or comparison prices",()=>{for(const offer of PEERMARKET_OFFERS){expect(offer.merchantId).toBe("peermarket");expect(offer.returnsDays).toBe(0);expect(offer.finalSale).toBe(true);expect(offer.warrantyLabel).toBe("No warranty included");expect(offer.compareAtPriceCents).toBeUndefined();expect(["USED_GOOD","USED_LIKE_NEW","OPEN_BOX"]).toContain(offer.condition);}});
+ it("uses only integer resale prices and stock from one through five",()=>{for(const offer of PEERMARKET_OFFERS){expect(Number.isSafeInteger(offer.unitPriceCents)&&offer.unitPriceCents>0).toBe(true);expect(Number.isSafeInteger(offer.stock)&&offer.stock>=1&&offer.stock<=5).toBe(true);expect(offer.rating).toBeGreaterThanOrEqual(3.8);expect(offer.rating).toBeLessThanOrEqual(4.5);}});
+ it("exposes transparent risk facts derived from each offer",()=>{const facts=getPeerRiskFacts(PEERMARKET_OFFERS.find(o=>o.sku==="HDP-001")!);expect(facts).toContain("Seller is not verified by PeerMarket");expect(facts).toContain("Used item — Used (Good)");expect(facts).toContain("Final sale — no returns");expect(facts).toContain("No warranty included");expect(facts).toContain("New seller — joined this month");});
+});
+describe("PeerMarket listing notes",()=>{
+ const notes=CANONICAL_PRODUCTS.flatMap(p=>getListingNotesForSku(p.sku));
+ it("provides at least two specific notes for every SKU",()=>{for(const p of CANONICAL_PRODUCTS){const listing=getListingNotesForSku(p.sku);expect(listing.length).toBeGreaterThanOrEqual(2);expect(listing.every(n=>n.length>20)).toBe(true);}});
+ it("does not reuse identical notes across products",()=>{expect(new Set(notes).size).toBe(notes.length);});
+});
+describe("PeerMarket reviews",()=>{
+ const all=CANONICAL_PRODUCTS.flatMap(p=>getReviewsForSku(p.sku));
+ it("returns three or four deterministic reviews for each product",()=>{for(const p of CANONICAL_PRODUCTS){const reviews=getReviewsForSku(p.sku);expect(reviews.length).toBeGreaterThanOrEqual(3);expect(reviews.length).toBeLessThanOrEqual(4);expect(getReviewsForSku(p.sku)).toEqual(reviews);}});
+ it("contains required fields and globally unique IDs and bodies",()=>{expect(new Set(all.map(r=>r.id)).size).toBe(all.length);expect(new Set(all.map(r=>r.body)).size).toBe(all.length);for(const r of all){expect(r.id).toMatch(/^PEERMARKET-/);expect(r.author).toBeTruthy();expect(r.rating).toBeGreaterThan(0);expect(r.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);expect(r.title).toBeTruthy();expect(r.body).toBeTruthy();expect(typeof r.verifiedPurchase).toBe("boolean");expect(Number.isInteger(r.helpfulCount)).toBe(true);}});
+ it("mentions listing condition, seller experience, and catalog facts for each product",()=>{for(const p of CANONICAL_PRODUCTS){const offer=PEERMARKET_OFFERS.find(o=>o.sku===p.sku)!;const reviews=getReviewsForSku(p.sku);expect(reviews.some(r=>r.body.toLowerCase().includes(conditionLabel(offer.condition).toLowerCase()))).toBe(true);expect(reviews.some(r=>r.body.includes(offer.seller.name))).toBe(true);for(const r of reviews){expect(p.features.filter(f=>r.body.toLowerCase().includes(f.toLowerCase())).length).toBeGreaterThanOrEqual(2);}}});
+});

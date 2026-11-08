@@ -12,7 +12,10 @@
     "spike:mcp": "tsx src/spikes/spike_mcp.ts",
     "spike:guard": "tsx src/spikes/test_guard.ts",
     "vault:setup": "tsx src/spikes/setup_vault.ts",
-    "agent:auto": "tsx src/spikes/autonomous_agent.ts"
+    "agent:auto": "tsx src/spikes/autonomous_agent.ts",
+    "store:novamart": "tsx packages/stores/novamart/src/index.ts",
+    "store:dealdemon": "tsx packages/stores/dealdemon/src/index.ts",
+    "store:peermarket": "tsx packages/stores/peermarket/src/index.ts"
   },
   "keywords": [],
   "author": "",

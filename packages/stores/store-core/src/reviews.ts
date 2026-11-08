@@ -1,0 +1,2 @@
+import type { ProductReview } from "./types.js";
+export function summarizeReviews(reviews:readonly ProductReview[]){const ratingCounts:Record<number,number>={1:0,2:0,3:0,4:0,5:0};let sum=0;for(const review of reviews){ratingCounts[review.rating]=(ratingCounts[review.rating]??0)+1;sum+=review.rating;}return {reviewCount:reviews.length,averageRating:reviews.length?Math.round(sum/reviews.length*10)/10:0,ratingCounts};}
