@@ -44,8 +44,53 @@ import type { Run } from "../../phase7-contracts/src/run.js";
 import type { CandidateCard } from "../../phase7-contracts/src/candidate.js";
 import type { Event } from "../../phase7-contracts/src/event.js";
 
+function extractSearchQuery(prompt: string): { query: string; maxBudgetCents?: number } {
+  const budgetMatch = prompt.match(/\$?([0-9]+(?:\.[0-9]{2})?)/);
+  const maxBudgetCents = budgetMatch ? Math.round(parseFloat(budgetMatch[1]!) * 100) : undefined;
+
+  const lower = prompt.toLowerCase();
+  // Check for direct SKU
+  const skuMatch = prompt.match(/\b(hdp-\d{3}|jkt-\d{3}|run-\d{3}|bpk-\d{3})\b/i);
+  if (skuMatch) {
+    return { query: skuMatch[1].toUpperCase(), maxBudgetCents };
+  }
+
+  // Canonical product categories
+  if (lower.includes("headphone") || lower.includes("earbud")) {
+    return { query: "headphones", maxBudgetCents };
+  }
+  if (lower.includes("jacket") || lower.includes("parka") || lower.includes("rain")) {
+    return { query: "jacket", maxBudgetCents };
+  }
+  if (lower.includes("shoe") || lower.includes("running") || lower.includes("trainer")) {
+    return { query: "running", maxBudgetCents };
+  }
+  if (lower.includes("backpack") || lower.includes("pack")) {
+    return { query: "backpack", maxBudgetCents };
+  }
+
+  // Stop words stripping
+  const stopWords = new Set([
+    "cheapest", "cheap", "expensive", "best", "find", "buy", "get", "search", "looking", "for",
+    "max", "min", "budget", "under", "all-in", "all", "in", "no", "not", "without",
+    "subscription", "subscriptions", "gift", "card", "cards", "ask", "me", "about",
+    "unverified", "verified", "seller", "sellers", "store", "stores", "merchant", "merchants",
+    "please", "the", "a", "an", "and", "or", "with", "only"
+  ]);
+
+  const words = prompt
+    .replace(/[^\w\s-]/g, " ")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !stopWords.has(w) && !/^\d+$/.test(w));
+
+  const query = words.slice(0, 2).join(" ") || "headphones";
+  return { query, maxBudgetCents };
+}
+
 class HybridMerchantToolTransport implements ToolTransport {
   private httpTransport = new HttpMerchantToolTransport();
+  private quoteCache = new Map<string, any>();
 
   constructor(
     private novamart: NovaMartStorefront,
@@ -61,26 +106,38 @@ class HybridMerchantToolTransport implements ToolTransport {
 
   async searchStore(input: SearchStoreInput) {
     try {
-      return await this.httpTransport.searchStore(input);
+      const results = await this.httpTransport.searchStore(input);
+      if (results && results.length > 0) return results;
     } catch {
-      const store = this.getStore(input.merchantId);
-      const results = store.search({ query: input.query });
-      return results.map((r: any) => ({
-        sku: r.product.sku,
-        slug: r.product.slug,
-        name: r.product.name,
-        brand: r.product.brand,
-        category: r.product.category,
-        features: r.product.features.slice(0, 2),
-        advertisedUnitPriceCents: r.offer.unitPriceCents,
-        estimatedTotalForOneCents: r.estimatedTotalForOneCents,
-        rating: r.offer.rating,
-        reviewCount: r.offer.reviewCount,
-        stock: r.offer.stock,
-        seller: r.seller,
-        productUrl: `/products/${r.product.slug}`,
-      }));
+      // ignore network error and fall back to in-process store
     }
+    const store = this.getStore(input.merchantId);
+    let results = store.search({ query: input.query });
+    if (results.length === 0) {
+      const tokens = input.query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+      for (const token of tokens) {
+        results = store.search({ query: token });
+        if (results.length > 0) break;
+      }
+      if (results.length === 0) {
+        results = store.search({});
+      }
+    }
+    return results.map((r: any) => ({
+      sku: r.product.sku,
+      slug: r.product.slug,
+      name: r.product.name,
+      brand: r.product.brand,
+      category: r.product.category,
+      features: r.product.features.slice(0, 2),
+      advertisedUnitPriceCents: r.offer.unitPriceCents,
+      estimatedTotalForOneCents: r.estimatedTotalForOneCents,
+      rating: r.offer.rating,
+      reviewCount: r.offer.reviewCount,
+      stock: r.offer.stock,
+      seller: r.seller,
+      productUrl: `/products/${r.product.slug}`,
+    }));
   }
 
   async getProduct(input: GetProductInput) {
@@ -96,18 +153,34 @@ class HybridMerchantToolTransport implements ToolTransport {
 
   async requestQuote(input: RequestQuoteInput): Promise<QuoteToolResult> {
     try {
-      return await this.httpTransport.requestQuote(input);
+      const quoteRes = await this.httpTransport.requestQuote(input);
+      const port = input.merchantId === "novamart" ? 8801 : input.merchantId === "dealdemon" ? 8802 : 8803;
+      try {
+        const fullRes = await fetch(`http://127.0.0.1:${port}/api/quotes/${encodeURIComponent(quoteRes.quoteId)}`);
+        if (fullRes.ok) {
+          const fullQuote = await fullRes.json();
+          this.quoteCache.set(quoteRes.quoteId, fullQuote);
+        }
+      } catch {
+        // ignore
+      }
+      return quoteRes;
     } catch {
       const store = this.getStore(input.merchantId);
       const cart = store.getCart();
       store.addCartItem(cart.id, input.sku, input.quantity, input.variant);
       const quote = store.createQuote(cart.id, "STANDARD");
+      this.quoteCache.set(quote.quoteId, quote);
       return {
         quoteId: quote.quoteId,
         quoteTotalCents: quote.totalCents,
         advertisedTotalCents: quote.totalCents,
       };
     }
+  }
+
+  getCachedQuote(quoteId: string): any | undefined {
+    return this.quoteCache.get(quoteId);
   }
 }
 
@@ -127,6 +200,7 @@ export class DataAdapter {
   private dealdemonStore: DealDemonStorefront;
   private peermarketStore: PeerMarketStorefront;
 
+  private toolTransport: HybridMerchantToolTransport;
   private gateway: GatewayService;
   private agentService: AgentService;
   private judgeStatus: "CONNECTED" | "UNAVAILABLE" = "CONNECTED";
@@ -250,7 +324,7 @@ export class DataAdapter {
       },
     });
 
-    const toolTransport = new HybridMerchantToolTransport(
+    this.toolTransport = new HybridMerchantToolTransport(
       this.novamartStore,
       this.dealdemonStore,
       this.peermarketStore,
@@ -258,10 +332,9 @@ export class DataAdapter {
 
     const agentModel = {
       planSearch: async (prompt: string) => {
-        const budgetMatch = prompt.match(/\$?([0-9]+(?:\.[0-9]{2})?)/);
-        const maxBudgetCents = budgetMatch ? Math.round(parseFloat(budgetMatch[1]!) * 100) : undefined;
+        const { query, maxBudgetCents } = extractSearchQuery(prompt);
         return {
-          query: prompt.trim() || "headphones",
+          query,
           quantity: 1,
           ...(maxBudgetCents ? { maxBudgetCents } : {}),
         };
@@ -273,7 +346,7 @@ export class DataAdapter {
 
     this.agentService = new AgentService({
       gateway: this.gateway,
-      tools: toolTransport,
+      tools: this.toolTransport,
       model: agentModel,
     });
   }
@@ -386,6 +459,9 @@ export class DataAdapter {
   }
 
   private async getSignedQuote(merchantId: string, quoteId: string): Promise<any> {
+    const cached = this.toolTransport.getCachedQuote(quoteId);
+    if (cached) return cached;
+
     const port = merchantId === "novamart" ? 8801 : merchantId === "dealdemon" ? 8802 : 8803;
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/quotes/${encodeURIComponent(quoteId)}`);

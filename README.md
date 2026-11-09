@@ -1,4 +1,4 @@
-﻿# Recourse
+# Recourse
 
 Recourse is a pre-payment firewall for agent-initiated payments. Before money
 moves, it checks a payment against a signed Intent Contract:
@@ -12,76 +12,91 @@ The deterministic engine makes the final payment decision. AI may only
 tighten a decision toward step-up or block; it can never loosen a
 deterministic block.
 
-## Judge demo: run it end to end
+## Judge demo: run it end to end (Phase 7 Control Center)
 
 The browser demo uses MockPsp only. It requires no PayPal credentials and
 moves no real money.
 
-### Start the app
+### Step 1: Start the three store servers
 
-From the repository root, in PowerShell:
+In three separate terminals from the repository root:
 
-    $env:RUN_PAYPAL_LIVE = "0"
-    $env:RECOURSE_PSP = "mock"
-    $env:HOST = "127.0.0.1"
-    $env:PORT = "8787"
-    $env:RECOURSE_DB_PATH = Join-Path $env:TEMP ("recourse-demo-" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + ".db")
+```powershell
+# Terminal 1: NovaMart (Honest Retailer — Port 8801)
+npm run store:novamart
 
-    Remove-Item Env:RECOURSE_SIGNING_PUBLIC_KEY_PEM -ErrorAction SilentlyContinue
-    Remove-Item Env:RECOURSE_SIGNING_PRIVATE_KEY_PEM -ErrorAction SilentlyContinue
+# Terminal 2: DealDemon (Discount/Adversarial Store — Port 8802)
+npm run store:dealdemon
 
-    npx tsx packages/app/src/main.ts
+# Terminal 3: PeerMarket (Peer Marketplace — Port 8803)
+npm run store:peermarket
+```
 
-Leave that terminal running and open:
+### Step 2: Start the Recourse Control Center
 
-    http://127.0.0.1:8787/
+In a fourth terminal from the repository root:
 
-Expected startup output includes:
+```powershell
+npm run app
+```
 
-    Recourse app listening on http://127.0.0.1:8787
-    MOCK/SANDBOX - NO REAL MONEY
-    PSP: MockPsp (tier C)
-    Judge: DISCONNECTED
+*(Alternatively: `npx tsx packages/app/src/main.ts` or `npm run ui`)*
 
-Do not use the repository root npm run dev script for this demo; it points
-at the legacy application entrypoint. The judge demo entrypoint is
-packages/app/src/main.ts.
+Leave that running and open your browser to:
 
-### Click path
+```
+http://127.0.0.1:8787/
+```
 
-Do not refresh the page between these three steps.
+### Step 3: End-to-end judge evaluation path
 
-1. Click Run ALLOW demo.
-   - The JK-101 items total $70.00.
-   - The merchant proposes $70.00.
-   - Expected result: ALLOW with a MockPsp capture of exactly $70.00.
-   - A signed receipt is added and the receipt count increases.
+1. **Agent Discovery across stores**:
+   - In the Prompt Composer, type `Cheapest wireless headphones, max $70 all-in` (or click `▶ Demo 1: BLOCK Bait & Recover`).
+   - The shopping agent queries NovaMart, DealDemon, and PeerMarket simultaneously.
+   - Candidates are proposed and ranked in the center panel:
+     - **NovaMart HDP-001** (AuraSound X200 Wireless Noise-Cancelling Headphones)
+     - **DealDemon HDP-001** (Discount bait with adverse terms/drip fees)
+     - **PeerMarket HDP-001** (Open-box, final-sale listing)
 
-2. Click Run BLOCK demo.
-   - The same JK-101 items total $70.00.
-   - The merchant proposes $120.00.
-   - Expected result: BLOCK with reason TOTAL_MISMATCH.
-   - Expected money moved: $0.00.
-   - A signed receipt is still added for the blocked attempt.
+2. **NovaMart Honest Purchase (ALLOW)**:
+   - Click **👉 Select Candidate for Purchase** on the NovaMart listing.
+   - Click **✍ Sign Contract & Authorize Gateway Execution**.
+   - The server signs the spending contract via host bridge with Ed25519, binds the draft, and submits the verified HMAC quote.
+   - **Verdict**: **ALLOWED**, exact computed total **$67.74 CAPTURED** via MockPsp. A hash-chained receipt is written to the ledger.
 
-3. Click Run Evidence demo.
-   - Recourse fetches the signed receipts created during this page session.
-   - It posts them with the signing public key to the evidence verifier.
-   - Expected result: Evidence VALID.
-   - Expected chain check: valid.
-   - Expected signature check: valid.
-   - Expected failures: none.
+3. **PeerMarket Human Review (STEP_UP)**:
+   - Run discovery for `running shoes` or click `▶ Demo 2: STEP_UP Human Review`.
+   - Select the PeerMarket candidate and click **✍ Sign Contract**.
+   - The AI Safety Review (`TighteningJudge`) detects the unverified seller / final-sale condition and tightens to **STEP_UP**.
+   - Execution pauses for human intervention:
+     - Click **✓ Approve & Continue**: MockPsp executes capture (**$50.17 CAPTURED**).
+     - Or click **✗ Reject & Abort**: Run ends with **$0.00 CAPTURED**.
 
-The Evidence step verifies receipts created in the current page session.
-After a page refresh, run ALLOW or BLOCK again before running Evidence.
+4. **DealDemon Adversarial Defense (BLOCK)**:
+   - Select the DealDemon candidate and sign with strict bounds ($70 max, no subscriptions).
+   - The deterministic engine catches prohibited subscription line items and price ceiling violation.
+   - **Verdict**: **BLOCKED**, **$0.00 CAPTURED** (payment is never called). The agent is notified to try the next candidate.
+
+5. **Cryptographic Proofs**:
+   - Click **Inspect Signed Cryptographic Evidence** or navigate to tab 5.
+   - Click **🛡️ Verify Cryptographic Chain**.
+   - Verifies the RFC 8032 Ed25519 signature and SHA-256 Merkle ledger hash chain. Result: **VALID**.
+
+---
 
 ## API used by the demo
 
-- GET / - judge-facing browser UI
-- GET /v1/app/status - app status and signing public key
-- POST /v1/payments/execute - executes ALLOW, BLOCK, or STEP_UP outcomes
-- GET /v1/receipts/:receiptId - returns one signed receipt entry
-- POST /v1/evidence/verify - verifies signed receipt entries against a public key
+- `GET /` — Judge-facing Control Center UI
+- `GET /api/status` — Gateway readiness, AI Safety Review status, and store registry
+- `POST /api/status/judge` — Toggle AI Judge connected/unavailable for fail-safe testing
+- `POST /api/phase7/runs` (and `POST /api/discovery/start`) — Start agent discovery
+- `GET /api/phase7/runs/:id` — Get run and candidate snapshot
+- `GET /api/phase7/runs/:id/events?afterSeq=N` — Incremental timeline event polling
+- `POST /api/phase7/runs/:id/select` — Human candidate selection
+- `POST /api/phase7/runs/:id/sign-and-submit` — Server-side Ed25519 contract signing & submission
+- `POST /api/phase7/runs/:id/step-up` — Human STEP_UP APPROVE / REJECT
+- `POST /api/attack/plant` — Attack Lab prompt injection testing
+- `POST /api/evidence/verify` — Cryptographic hash chain verification
 
 ## Trust model
 

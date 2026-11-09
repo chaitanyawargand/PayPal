@@ -245,14 +245,29 @@
 
     try {
       const res = await apiPost("/api/discovery/start", { prompt: promptText });
+      if (!res.candidates || res.candidates.length === 0) {
+        throw new Error("No candidates were returned by the storefronts.");
+      }
       state.currentRun = res.run;
       state.candidates = res.candidates;
 
       renderRunState(res.run, res.candidates);
       startPolling(res.run.id);
     } catch (err) {
-      alert("Discovery failed: " + err.message);
-      timelineList.innerHTML = `<div style="color: #ef4444; font-size: 13px; text-align: center; padding: 20px;">Discovery Error: ${escapeHtml(err.message)}</div>`;
+      state.currentRun = null;
+      state.candidates = [];
+      state.selectedCandidateId = null;
+      if (inlineSignPanel) inlineSignPanel.style.display = "none";
+      if (stepupIntervenePanel) stepupIntervenePanel.style.display = "none";
+      candidatesContainer.innerHTML = `
+        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; border-radius: var(--radius-md); padding: 20px; text-align: center; color: #fca5a5;">
+          <strong>Discovery Error:</strong> ${escapeHtml(err.message)}
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
+            Please ensure search terms match store catalog categories (e.g. headphones, jacket, shoes, backpack) and live stores are reachable on ports 8801, 8802, 8803.
+          </div>
+        </div>
+      `;
+      timelineList.innerHTML = `<div style="color: #ef4444; font-size: 13px; text-align: center; padding: 20px;">Discovery halted: ${escapeHtml(err.message)}</div>`;
     }
   }
 
@@ -314,7 +329,14 @@
 
   // --- Candidate Selection ---
   async function selectCandidate(candidateId) {
-    if (!state.currentRun) return;
+    if (!state.currentRun) {
+      alert("No active run. Please start discovery first.");
+      return;
+    }
+    if (state.currentRun.status !== "AWAITING_SELECTION") {
+      alert(`Candidate selection is only allowed when awaiting selection (current status: ${state.currentRun.status}).`);
+      return;
+    }
     try {
       const res = await apiPost(`/api/run/${encodeURIComponent(state.currentRun.id)}/select`, { candidateId });
       state.currentRun = res.run;
@@ -330,7 +352,14 @@
 
   // --- Host Bridge: Compile and Sign Spending Contract ---
   async function signAndSubmitContract(limits) {
-    if (!state.currentRun) return;
+    if (!state.currentRun || !state.currentRun.selectedCandidateId) {
+      alert("No candidate selected. Please select a candidate before signing.");
+      return;
+    }
+    if (state.currentRun.status !== "AWAITING_SIGNATURE") {
+      alert(`Cannot sign contract: run is in state '${state.currentRun.status}', awaiting selection.`);
+      return;
+    }
     if (btnInlineSign) {
       btnInlineSign.disabled = true;
       btnInlineSign.textContent = "Compiling & Signing with Ed25519...";
@@ -375,6 +404,11 @@
   // Also hook up View 2 contract form
   if (btnSignContract) {
     btnSignContract.addEventListener("click", () => {
+      if (!state.currentRun || !state.currentRun.selectedCandidateId) {
+        alert("Please start discovery and select a candidate first.");
+        switchView("run");
+        return;
+      }
       const dollars = parseFloat(ctMaxDollars.value) || 70;
       const cents = Math.round(dollars * 100);
       signAndSubmitContract({
