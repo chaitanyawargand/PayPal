@@ -37,6 +37,11 @@
 
   function mapReasonCodeToPlainEnglish(code) {
     const map = {
+      AI_JUDGE_BLOCK: "This merchant listing includes a prohibited recurring subscription and hidden drip fees.",
+      AI_JUDGE_STEP_UP: "The listing contains unverified seller or final-sale terms that require explicit human approval.",
+      AI_JUDGE_UNAVAILABLE: "AI Safety Review was unavailable; tightened to human review as a safety fail-safe.",
+      TOTAL_MISMATCH: "The store's signed total did not match the computed total of its line items.",
+      BLOCKED_CATEGORY: "This purchase includes a prohibited category (such as a gift card or auto-renewing subscription).",
       PROHIBITED_SUBSCRIPTION: "This purchase includes a prohibited auto-renewing subscription.",
       SUBSCRIPTION_DETECTED: "This purchase includes a prohibited auto-renewing subscription.",
       PROHIBITED_CATEGORY: "The item belongs to a prohibited category (e.g. gift cards or subscriptions).",
@@ -558,31 +563,61 @@
         btnVerify.addEventListener("click", verifyEvidenceFlow);
       }
     } else if (outcome === "STEP_UP") {
-      el.decisionBanner.className = "decision-banner stepup";
-      const reasons = (decision.reasonCodes || []).map(mapReasonCodeToPlainEnglish).join(" ");
-      el.decisionBanner.innerHTML = `
-        <div class="verdict-headline">
-          <span>⚠️</span>
-          <span>HUMAN REVIEW NEEDED — $0 captured so far</span>
-        </div>
-        <div class="verdict-body">
-          ${escapeHtml(reasons || "The purchase contains risky terms (such as an unverified seller or final-sale terms) that require explicit human approval.")}
-        </div>
-        <div class="verdict-meta-grid">
-          <div><span class="field-label">Merchant</span><br><strong>${escapeHtml(merchantName)}</strong></div>
-          <div><span class="field-label">Pending Total</span><br><strong>${formatCents(decision.computedTotalCents || candidate.quoteTotalCents)}</strong></div>
-          <div><span class="field-label">Captured So Far</span><br><strong style="color:#f59e0b;">$0.00</strong></div>
-          <div><span class="field-label">Status</span><br><strong>STEP_UP_REQUIRED</strong></div>
-        </div>
-        <div class="verdict-actions-row">
-          <button type="button" id="btn-stepup-approve" class="btn-primary">Approve &amp; Pay</button>
-          <button type="button" id="btn-stepup-reject" class="btn-danger">Reject — Do Not Pay</button>
-        </div>
-      `;
+      const isApproved = Boolean(decision.receiptId || (state.latestRun && state.latestRun.status === "COMPLETED"));
+      if (isApproved) {
+        state.receiptId = decision.receiptId;
+        el.decisionBanner.className = "decision-banner allow";
+        el.decisionBanner.innerHTML = `
+          <div class="verdict-headline">
+            <span>✓</span>
+            <span>APPROVED — ${formatCents(decision.computedTotalCents || candidate.quoteTotalCents)} captured</span>
+          </div>
+          <div class="verdict-body">
+            Step-up review exception was approved by human. Mock PSP executed the transaction for the exact verified store quote.
+          </div>
+          <div class="verdict-meta-grid">
+            <div><span class="field-label">Merchant</span><br><strong>${escapeHtml(merchantName)}</strong></div>
+            <div><span class="field-label">Captured Amount</span><br><strong style="color:#10b981;">${formatCents(decision.computedTotalCents || candidate.quoteTotalCents)}</strong></div>
+            <div><span class="field-label">Receipt ID</span><br><code style="font-size:11px;">${escapeHtml(decision.receiptId || "rcpt_mock_001")}</code></div>
+            <div><span class="field-label">Status</span><br><strong>COMPLETED (APPROVED)</strong></div>
+          </div>
+          <div class="verdict-actions-row">
+            <button type="button" id="btn-verify-evidence" class="btn-primary">Verify Evidence</button>
+            <span style="font-size:12px; color:var(--text-muted);">Independent cryptographic audit of public key and hash chain</span>
+          </div>
+          <div id="evidence-display-area" class="hidden"></div>
+        `;
+        const btnVerify = document.getElementById("btn-verify-evidence");
+        if (btnVerify) {
+          btnVerify.addEventListener("click", verifyEvidenceFlow);
+        }
+      } else {
+        el.decisionBanner.className = "decision-banner stepup";
+        const reasons = (decision.reasonCodes || []).map(mapReasonCodeToPlainEnglish).join(" ");
+        el.decisionBanner.innerHTML = `
+          <div class="verdict-headline">
+            <span>⚠️</span>
+            <span>HUMAN REVIEW NEEDED — $0 captured so far</span>
+          </div>
+          <div class="verdict-body">
+            ${escapeHtml(reasons || "The purchase contains risky terms (such as an unverified seller or final-sale terms) that require explicit human approval.")}
+          </div>
+          <div class="verdict-meta-grid">
+            <div><span class="field-label">Merchant</span><br><strong>${escapeHtml(merchantName)}</strong></div>
+            <div><span class="field-label">Pending Total</span><br><strong>${formatCents(decision.computedTotalCents || candidate.quoteTotalCents)}</strong></div>
+            <div><span class="field-label">Captured So Far</span><br><strong style="color:#f59e0b;">$0.00</strong></div>
+            <div><span class="field-label">Status</span><br><strong>STEP_UP_REQUIRED</strong></div>
+          </div>
+          <div class="verdict-actions-row">
+            <button type="button" id="btn-stepup-approve" class="btn-primary">Approve &amp; Pay</button>
+            <button type="button" id="btn-stepup-reject" class="btn-danger">Reject — Do Not Pay</button>
+          </div>
+        `;
 
-      // Wire STEP_UP buttons
-      document.getElementById("btn-stepup-approve").addEventListener("click", () => decideStepUpFlow("APPROVE"));
-      document.getElementById("btn-stepup-reject").addEventListener("click", () => decideStepUpFlow("REJECT"));
+        // Wire STEP_UP buttons
+        document.getElementById("btn-stepup-approve").addEventListener("click", () => decideStepUpFlow("APPROVE"));
+        document.getElementById("btn-stepup-reject").addEventListener("click", () => decideStepUpFlow("REJECT"));
+      }
     } else if (outcome === "BLOCK") {
       el.decisionBanner.className = "decision-banner block";
       const reasons = (decision.reasonCodes || []).map(mapReasonCodeToPlainEnglish).join(" ");

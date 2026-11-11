@@ -259,6 +259,10 @@ export class DataAdapter {
         if (this.judgeStatus === "UNAVAILABLE") {
           throw new Error("AI Safety Review is unavailable");
         }
+        // DealDemon listings contain prohibited subscriptions and adverse terms -> BLOCK
+        if (facts.candidate.merchantId === "dealdemon" || facts.candidate.terms.subscription || facts.candidate.terms.giftCard) {
+          return { recommendation: "BLOCK" };
+        }
         // Tightening logic: PeerMarket final-sale listings tighten to STEP_UP
         if (facts.candidate.merchantId === "peermarket" && facts.candidate.terms.finalSale) {
           return { recommendation: "STEP_UP" };
