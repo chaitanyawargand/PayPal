@@ -24,6 +24,7 @@ export interface SystemStatus {
     port: number;
     url: string;
     type: "Honest Retailer" | "Discount Store" | "Risky Marketplace";
+    online?: boolean;
   }>;
 }
 

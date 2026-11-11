@@ -118,6 +118,10 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
         return sendJson(res, 200, status);
       }
 
+      if (pathname === "/api/psp/stats" && method === "GET") {
+        return sendJson(res, 200, adapter.getPspStats());
+      }
+
       if (pathname === "/api/status/judge" && method === "POST") {
         const body = await parseJsonBody<{ status: "CONNECTED" | "UNAVAILABLE" }>(req);
         if (body.status === "CONNECTED" || body.status === "UNAVAILABLE") {
@@ -134,8 +138,20 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
         if (!body.prompt || typeof body.prompt !== "string") {
           return sendJson(res, 400, { error: "prompt is required" });
         }
-        const result = await adapter.startDiscovery(body.prompt);
-        return sendJson(res, 200, result);
+        try {
+          const result = await adapter.startDiscovery(body.prompt);
+          return sendJson(res, 200, result);
+        } catch (err: any) {
+          if (err?.code === "NO_CANDIDATES" || err?.message?.includes("No valid candidates") || err?.message?.includes("NO_CANDIDATES")) {
+            return sendJson(res, 200, {
+              status: "NO_CANDIDATES",
+              message: "No matching candidates found for that prompt.",
+              candidates: [],
+              run: null,
+            });
+          }
+          throw err;
+        }
       }
 
       // 3. Candidate selection
@@ -155,6 +171,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       if (signMatch && method === "POST") {
         const runId = decodeURIComponent(signMatch[1]!);
         const body = await parseJsonBody<{
+          candidateId?: string;
           limits?: SpendingContractInput;
           maxBudgetCents?: number;
           perOrderCapCents?: number;
@@ -167,17 +184,17 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
         }>(req);
 
         const limits: SpendingContractInput = body.limits ?? {
-          maxBudgetCents: body.maxBudgetCents ?? 7000,
-          perOrderCapCents: body.perOrderCapCents,
+          maxBudgetCents: body.maxBudgetCents ?? 10000,
+          perOrderCapCents: body.perOrderCapCents ?? body.maxBudgetCents ?? 10000,
           maxQuantity: body.maxQuantity,
-          noSubscriptions: body.noSubscriptions,
-          noGiftCards: body.noGiftCards,
+          noSubscriptions: body.noSubscriptions ?? true,
+          noGiftCards: body.noGiftCards ?? true,
           unverifiedSellerRule: body.unverifiedSellerRule,
           allowedPayees: body.allowedPayees,
           expiryMinutes: body.expiryMinutes,
         };
 
-        const result = await adapter.compileAndSign(runId, limits);
+        const result = await adapter.compileAndSign(runId, limits, body.candidateId);
         return sendJson(res, 200, result);
       }
 

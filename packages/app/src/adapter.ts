@@ -84,7 +84,7 @@ function extractSearchQuery(prompt: string): { query: string; maxBudgetCents?: n
     .split(/\s+/)
     .filter((w) => w.length > 1 && !stopWords.has(w) && !/^\d+$/.test(w));
 
-  const query = words.slice(0, 2).join(" ") || "headphones";
+  const query = words.slice(0, 2).join(" ") || prompt.trim();
   return { query, maxBudgetCents };
 }
 
@@ -107,7 +107,7 @@ class HybridMerchantToolTransport implements ToolTransport {
   async searchStore(input: SearchStoreInput) {
     try {
       const results = await this.httpTransport.searchStore(input);
-      if (results && results.length > 0) return results;
+      return results;
     } catch {
       // ignore network error and fall back to in-process store
     }
@@ -118,9 +118,6 @@ class HybridMerchantToolTransport implements ToolTransport {
       for (const token of tokens) {
         results = store.search({ query: token });
         if (results.length > 0) break;
-      }
-      if (results.length === 0) {
-        results = store.search({});
       }
     }
     return results.map((r: any) => ({
@@ -135,7 +132,13 @@ class HybridMerchantToolTransport implements ToolTransport {
       rating: r.offer.rating,
       reviewCount: r.offer.reviewCount,
       stock: r.offer.stock,
-      seller: r.seller,
+      seller: r.seller ?? {
+        id: input.merchantId,
+        name: input.merchantId === "novamart" ? "NovaMart Official"
+          : input.merchantId === "peermarket" ? "PeerMarket Seller"
+          : input.merchantId === "dealdemon" ? "DealDemon" : input.merchantId,
+        verified: input.merchantId === "novamart",
+      },
       productUrl: `/products/${r.product.slug}`,
     }));
   }
@@ -355,34 +358,53 @@ export class DataAdapter {
     return this.gateway;
   }
 
-  async getStatus(): Promise<SystemStatus> {
+  async getStatus(): Promise<SystemStatus & { pspCaptures: number; pspCapturedCents: number }> {
+    const probeStore = async (
+      id: string,
+      name: string,
+      port: number,
+      type: "Honest Retailer" | "Discount Store" | "Risky Marketplace",
+    ) => {
+      let online = false;
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 500);
+        const res = await fetch(`http://127.0.0.1:${port}/`, { signal: ctrl.signal });
+        clearTimeout(t);
+        online = res.ok || res.status < 500;
+      } catch {
+        online = false;
+      }
+      return {
+        id,
+        name,
+        port,
+        url: `http://localhost:${port}`,
+        type,
+        online,
+      };
+    };
+
+    const stores = await Promise.all([
+      probeStore("novamart", "NovaMart Official", 8801, "Honest Retailer"),
+      probeStore("dealdemon", "DealDemon", 8802, "Discount Store"),
+      probeStore("peermarket", "PeerMarket", 8803, "Risky Marketplace"),
+    ]);
+
     return {
       gateway: "READY",
       aiJudge: this.judgeStatus,
       paymentMode: "Mock PSP",
-      stores: [
-        {
-          id: "novamart",
-          name: "NovaMart Official",
-          port: 8801,
-          url: "http://localhost:8801",
-          type: "Honest Retailer",
-        },
-        {
-          id: "dealdemon",
-          name: "DealDemon",
-          port: 8802,
-          url: "http://localhost:8802",
-          type: "Discount Store",
-        },
-        {
-          id: "peermarket",
-          name: "PeerMarket",
-          port: 8803,
-          url: "http://localhost:8803",
-          type: "Risky Marketplace",
-        },
-      ],
+      stores,
+      pspCaptures: this.psp.captureCount(),
+      pspCapturedCents: this.psp.totalCapturedCents(),
+    };
+  }
+
+  getPspStats() {
+    return {
+      captureCount: this.psp.captureCount(),
+      capturedCents: this.psp.totalCapturedCents(),
     };
   }
 
@@ -401,10 +423,21 @@ export class DataAdapter {
   async compileAndSign(
     runId: string,
     limits: SpendingContractInput,
+    candidateIdOverride?: string,
   ): Promise<{ run: Run; candidates: CandidateCard[]; contract: any }> {
-    const snapshot = this.gateway.getRun(runId);
-    const selectedCandidateId = snapshot.run.selectedCandidateId;
-    if (!selectedCandidateId) throw new Error("No candidate selected for run");
+    let snapshot = this.gateway.getRun(runId);
+    let selectedCandidateId = candidateIdOverride || snapshot.run.selectedCandidateId;
+
+    if (!selectedCandidateId) {
+      const defaultCandidate = snapshot.candidates.find((c) => c.status === "PROPOSED") ?? snapshot.candidates[0];
+      if (!defaultCandidate) throw new Error("No proposed candidate available for run");
+      selectedCandidateId = defaultCandidate.id;
+      const updated = this.gateway.selectCandidate(runId, selectedCandidateId);
+      snapshot = updated;
+    } else if (snapshot.run.status === "AWAITING_SELECTION" || snapshot.run.selectedCandidateId !== selectedCandidateId) {
+      const updated = this.gateway.selectCandidate(runId, selectedCandidateId);
+      snapshot = updated;
+    }
 
     const candidate = snapshot.candidates.find((c) => c.id === selectedCandidateId);
     if (!candidate) throw new Error(`Selected candidate ${selectedCandidateId} not found`);
@@ -416,12 +449,17 @@ export class DataAdapter {
     const expiryMinutes = limits.expiryMinutes ?? 15;
     const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000).toISOString();
 
+    const maxBudgetCents = limits.maxBudgetCents > 0 ? limits.maxBudgetCents : 10000;
+    const perOrderCapCents = limits.perOrderCapCents && limits.perOrderCapCents > 0
+      ? limits.perOrderCapCents
+      : maxBudgetCents;
+
     const compiled = compileDraftContract({
       prompt: snapshot.run.prompt,
       payer_id: "payer_user",
       allowed_payee_ids: limits.allowedPayees ?? [candidate.merchantId],
-      budget_max_cents: limits.maxBudgetCents,
-      per_order_cap_cents: limits.perOrderCapCents ?? limits.maxBudgetCents,
+      budget_max_cents: maxBudgetCents,
+      per_order_cap_cents: perOrderCapCents,
       blocked_categories: blockedCategories,
       expires_at: expiresAt,
     });

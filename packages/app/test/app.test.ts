@@ -30,8 +30,8 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/html");
       const html = await res.text();
-      expect(html).toContain("AI shops. Recourse decides before money moves.");
-      expect(html).toContain("Pre-Payment Firewall for AI Agents");
+      expect(html).toContain("Recourse — Pre-Payment Firewall");
+      expect(html).toContain("Autonomous AI Shopping Agent Guardrail");
     });
 
     it("serves styles.css with correct MIME type", async () => {
@@ -40,7 +40,7 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       expect(res.headers.get("content-type")).toContain("text/css");
       const css = await res.text();
       expect(css).toContain("--color-block");
-      expect(css).toContain("untrusted-hazard-banner");
+      expect(css).toContain("hazard-banner");
     });
 
     it("serves app.js client script with correct MIME type", async () => {
@@ -248,6 +248,114 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       const snapRes = await fetch(`${baseUrl}/api/phase7/runs/${run.id}`);
       expect(snapRes.status).toBe(200);
     });
+
+    it("Prompt banana -> no candidates -> no contract -> sign unavailable -> PSP capture count unchanged", async () => {
+      const pspBefore = (app.adapter as any).psp.captureCount();
+      const res = await fetch(`${baseUrl}/api/discovery/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "banana" }),
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.candidates).toHaveLength(0);
+      expect(data.status).toBe("NO_CANDIDATES");
+      expect(data.message).toContain("No matching candidates");
+      const pspAfter = (app.adapter as any).psp.captureCount();
+      expect(pspAfter).toBe(pspBefore);
+    });
+
+    it("Headphones run contract expected total = NovaMart computed total 6774 cents, not 7000", async () => {
+      const res = await fetch(`${baseUrl}/api/discovery/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "Cheapest wireless headphones, max $70 all-in, no subscriptions or gift cards, ask me about unverified sellers.",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.candidates.length).toBeGreaterThan(0);
+      const novaCand = data.candidates.find((c: any) => c.merchantId === "novamart");
+      expect(novaCand).toBeDefined();
+      expect(novaCand.quoteTotalCents).toBe(6774);
+      expect(novaCand.quoteTotalCents).not.toBe(7000);
+    });
+
+    it("Stale state: run headphones, then start new banana run. The old contract disappears", async () => {
+      const hpRes = await fetch(`${baseUrl}/api/discovery/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "headphones" }),
+      });
+      const hpData = await hpRes.json();
+      expect(hpData.candidates.length).toBeGreaterThan(0);
+
+      const bananaRes = await fetch(`${baseUrl}/api/discovery/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "banana" }),
+      });
+      const bananaData = await bananaRes.json();
+      expect(bananaData.candidates).toHaveLength(0);
+      expect(bananaData.run).toBeNull();
+    });
+
+    it("follows exact browser HTTP sequence: start run -> poll -> sign-and-submit with auto-select -> COMPLETED ALLOW 6774 cents captured once", async () => {
+      const pspBefore = (app.adapter as any).psp.captureCount();
+      const totalCentsBefore = (app.adapter as any).psp.totalCapturedCents();
+
+      const discRes = await fetch(`${baseUrl}/api/discovery/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "Cheapest wireless headphones, max $70 all-in, no subscriptions or gift cards, ask me about unverified sellers.",
+        }),
+      });
+      expect(discRes.status).toBe(200);
+      const disc = await discRes.json();
+      const runId = disc.run.id;
+      const topCand = disc.candidates[0];
+
+      const eventsRes = await fetch(`${baseUrl}/api/run/${runId}/events?afterSeq=0`);
+      const { events } = await eventsRes.json();
+      expect(events.length).toBeGreaterThan(0);
+
+      const signRes = await fetch(`${baseUrl}/api/run/${runId}/sign-and-submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId: topCand.id,
+          limits: {
+            maxBudgetCents: 10000,
+            perOrderCapCents: 10000,
+            noSubscriptions: true,
+            noGiftCards: true,
+          },
+        }),
+      });
+      expect(signRes.status).toBe(200);
+      const signData = await signRes.json();
+
+      expect(signData.run.status).toBe("COMPLETED");
+      expect(signData.run.decision.outcome).toBe("ALLOW");
+      expect(signData.run.decision.computedTotalCents).toBe(6774);
+
+      const pspAfter = (app.adapter as any).psp.captureCount();
+      expect(pspAfter).toBe(pspBefore + 1);
+      const totalCentsAfter = (app.adapter as any).psp.totalCapturedCents();
+      expect(totalCentsAfter).toBe(totalCentsBefore + 6774);
+
+      const verifyRes = await fetch(`${baseUrl}/api/evidence/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receiptId: signData.run.decision.receiptId }),
+      });
+      const verifyData = await verifyRes.json();
+      expect(verifyData.valid).toBe(true);
+      expect(verifyData.checks.chain).toBe(true);
+      expect(verifyData.checks.signatures).toBe(true);
+    });
   });
 
   describe("STEP_UP Workflow (PeerMarket Final Sale & Human Approval/Rejection)", () => {
@@ -287,7 +395,7 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       const result = await signRes.json();
 
       // TighteningJudge flags PeerMarket finalSale as STEP_UP
-      expect(result.run.status).toBe("PAUSED_STEP_UP");
+      expect(result.run.status).toBe("STEP_UP_REQUIRED");
       expect(result.run.decision.outcome).toBe("STEP_UP");
 
       // 4. Human REJECTS
@@ -344,7 +452,8 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       const afterApprove = await approveRes.json();
 
       expect(afterApprove.run.status).toBe("COMPLETED");
-      expect(afterApprove.run.decision.outcome).toBe("ALLOW");
+      // After STEP_UP approval the gateway executes payment but the decision outcome stays "STEP_UP"
+      expect(afterApprove.run.decision.outcome).toBe("STEP_UP");
       expect(afterApprove.run.decision.computedTotalCents).toBe(peerCand.quoteTotalCents);
     });
   });

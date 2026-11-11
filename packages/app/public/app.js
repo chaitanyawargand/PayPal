@@ -1,6 +1,5 @@
-// Recourse Control Center Client Logic
-// Pre-Payment Firewall for Autonomous AI Shopping Agents
-// Senior Software Engineering Standards: Strict text escaping, robust polling with afterSeq, server-side contract signing.
+// Recourse Control Center — Linear One-Page Judge Flow Client
+// Senior Software Engineering Standards: Deterministic state machine, double-click protection, strict integer cents.
 
 (function () {
   "use strict";
@@ -21,130 +20,142 @@
     return `$${(cents / 100).toFixed(2)}`;
   }
 
-  // --- Application State ---
+  function parseDollarToCents(val) {
+    if (typeof val === "number") {
+      if (!Number.isFinite(val) || val <= 0) return null;
+      return Math.round(val * 100);
+    }
+    if (typeof val === "string") {
+      const cleaned = val.replace(/[$,]/g, "").trim();
+      if (!cleaned) return null;
+      const num = parseFloat(cleaned);
+      if (!Number.isFinite(num) || num <= 0) return null;
+      return Math.round(num * 100);
+    }
+    return null;
+  }
+
+  function mapReasonCodeToPlainEnglish(code) {
+    const map = {
+      PROHIBITED_SUBSCRIPTION: "This purchase includes a prohibited auto-renewing subscription.",
+      SUBSCRIPTION_DETECTED: "This purchase includes a prohibited auto-renewing subscription.",
+      PROHIBITED_CATEGORY: "The item belongs to a prohibited category (e.g. gift cards or subscriptions).",
+      BUDGET_EXCEEDED: "The total exceeds the signed budget limit.",
+      CAP_EXCEEDED: "The total exceeds the signed per-order cap.",
+      PAYEE_NOT_ALLOWED: "The merchant is not the payee authorized in the contract.",
+      MERCHANT_MISMATCH: "The merchant does not match the authorized payee in the spending contract.",
+      UNVERIFIED_SELLER: "The seller is unverified and requires human review.",
+      ADVERSE_TERMS: "The store added hidden fees or unfavorable terms (drip pricing).",
+      FINAL_SALE: "The listing is final sale with no returns allowed.",
+      QUOTE_EXPIRED: "The store's signed quote has expired.",
+      QUOTE_ID_MISMATCH: "The quote ID did not match the merchant record.",
+      INVALID_SIGNATURE: "The store's cryptographic signature could not be verified.",
+      TAMPER_REJECT: "The quote was rejected as tampered; signed total did not match line items.",
+    };
+    return map[code] || `Payment check failed with rule code: ${code}`;
+  }
+
+  // --- Explicit State Object ---
   const state = {
-    currentView: "home",
-    systemStatus: null,
-    currentRun: null,
+    generation: 0,
+    runId: null,
+    afterSeq: 0,
+    latestRun: null,
     candidates: [],
+    agentPickId: null,
     selectedCandidateId: null,
-    events: [],
-    lastSeq: 0,
+    selectedOnServerId: null,
+    currentStep: 1, // 1: Shop, 2: Agent's Pick, 3: Review Contract, 4: Payment Decision
+    busy: false,
+    lastDecision: null,
+    receiptId: null,
+    evidenceResult: null,
     pollTimer: null,
-    activeAttack: null,
-    hiddenTextRevealed: false,
-    lastReceiptId: "rcpt_demo_sa_001",
+    systemStatus: null,
   };
 
   // --- DOM Elements ---
-  const views = {
-    home: document.getElementById("view-home"),
-    contract: document.getElementById("view-contract"),
-    run: document.getElementById("view-run"),
-    attack: document.getElementById("view-attack"),
-    evidence: document.getElementById("view-evidence"),
+  const el = {
+    // Header Statuses
+    novamartDot: document.getElementById("novamart-dot"),
+    novamartStatus: document.getElementById("novamart-status"),
+    dealdemonDot: document.getElementById("dealdemon-dot"),
+    dealdemonStatus: document.getElementById("dealdemon-status"),
+    peermarketDot: document.getElementById("peermarket-dot"),
+    peermarketStatus: document.getElementById("peermarket-status"),
+    gatewayDot: document.getElementById("gateway-dot"),
+    gatewayStatus: document.getElementById("gateway-status"),
+    judgeDot: document.getElementById("judge-dot"),
+    judgeStatus: document.getElementById("judge-status"),
+    demoJudgeLabel: document.getElementById("demo-judge-status-label"),
+    btnToggleJudge: document.getElementById("btn-toggle-judge"),
+    storeOfflineBanner: document.getElementById("store-offline-banner"),
+    offlineStoreName: document.getElementById("offline-store-name"),
+
+    // Step Nav
+    stepNav1: document.getElementById("step-nav-1"),
+    stepNav2: document.getElementById("step-nav-2"),
+    stepNav3: document.getElementById("step-nav-3"),
+    stepNav4: document.getElementById("step-nav-4"),
+
+    // Sections
+    sectionShop: document.getElementById("section-shop"),
+    sectionCandidates: document.getElementById("section-candidates"),
+    sectionContract: document.getElementById("section-contract"),
+    sectionDecision: document.getElementById("section-decision"),
+
+    // Section 1: Shop
+    promptInput: document.getElementById("prompt-input"),
+    btnAskAgent: document.getElementById("btn-ask-agent"),
+    shopStatusText: document.getElementById("shop-status-text"),
+    promptChips: document.querySelectorAll(".prompt-chip"),
+
+    // Section 2: Candidates
+    noCandidatesBox: document.getElementById("no-candidates-box"),
+    noCandidatesMsg: document.getElementById("no-candidates-msg"),
+    candidatesContainer: document.getElementById("candidates-container"),
+
+    // Section 3: Review Contract
+    contractStatusBadge: document.getElementById("contract-status-badge"),
+    contractProductName: document.getElementById("contract-product-name"),
+    contractMerchantName: document.getElementById("contract-merchant-name"),
+    contractQuantity: document.getElementById("contract-quantity"),
+    contractExpectedTotal: document.getElementById("contract-expected-total"),
+    contractAllowedPayee: document.getElementById("contract-allowed-payee"),
+    inputBudgetDollars: document.getElementById("input-budget-dollars"),
+    budgetCentsLabel: document.getElementById("budget-cents-label"),
+    inputCapDollars: document.getElementById("input-cap-dollars"),
+    capCentsLabel: document.getElementById("cap-cents-label"),
+    checkNoSubs: document.getElementById("check-no-subs"),
+    checkNoCards: document.getElementById("check-no-cards"),
+    capWarning: document.getElementById("cap-warning"),
+    btnSignSubmit: document.getElementById("btn-sign-submit"),
+    signSubmittingSpinner: document.getElementById("sign-submitting-spinner"),
+
+    // Section 4: Payment Decision
+    decisionBanner: document.getElementById("decision-banner"),
+
+    // Secondary Panels
+    timelineRunId: document.getElementById("timeline-run-id"),
+    timelineCount: document.getElementById("timeline-count"),
+    timelineList: document.getElementById("timeline-events-list"),
+    rawJsonViewer: document.getElementById("raw-json-viewer"),
+    attackForm: document.getElementById("attack-form"),
+    attackStore: document.getElementById("attack-store"),
+    attackSku: document.getElementById("attack-sku"),
+    attackPlacement: document.getElementById("attack-placement"),
+    attackInstruction: document.getElementById("attack-instruction"),
+    btnPlantAttack: document.getElementById("btn-plant-attack"),
+    attackStatusMsg: document.getElementById("attack-status-msg"),
   };
-
-  const navButtons = document.querySelectorAll(".nav-tab-btn");
-
-  // Status elements
-  const gatewayStatusDot = document.getElementById("gateway-status-dot");
-  const gatewayStatusLabel = document.getElementById("gateway-status-label");
-  const judgeStatusDot = document.getElementById("judge-status-dot");
-  const judgeStatusLabel = document.getElementById("judge-status-label");
-  const toggleJudgeBtn = document.getElementById("toggle-judge-btn");
-  const paymentModeLabel = document.getElementById("payment-mode-label");
-  const judgeWarningBanner = document.getElementById("judge-warning-banner");
-
-  // Home view elements
-  const promptInput = document.getElementById("prompt-input");
-  const btnDraftContract = document.getElementById("btn-draft-contract");
-
-  // Contract view elements
-  const ctWhat = document.getElementById("ct-what");
-  const ctMaxDollars = document.getElementById("ct-max-dollars");
-  const ctCentsPreview = document.getElementById("ct-cents-preview");
-  const ctMaxQty = document.getElementById("ct-max-qty");
-  const ctNoSubs = document.getElementById("ct-no-subs");
-  const ctNoGiftCards = document.getElementById("ct-no-giftcards");
-  const ctUnverified = document.getElementById("ct-unverified");
-  const ctExpiry = document.getElementById("ct-expiry");
-  const btnSignContract = document.getElementById("btn-sign-contract");
-  const btnLaunchRun = document.getElementById("btn-launch-run");
-  const contractStatusTag = document.getElementById("contract-status-tag");
-
-  // Run view elements
-  const timelineRunBadge = document.getElementById("timeline-run-badge");
-  const timelineList = document.getElementById("timeline-list");
-  const browserCurrentUrl = document.getElementById("browser-current-url");
-  const browserProductTitle = document.getElementById("browser-product-title");
-  const browserAdvPrice = document.getElementById("browser-adv-price");
-  const browserMerchantName = document.getElementById("browser-merchant-name");
-  const browserPageText = document.getElementById("browser-page-text");
-  const browserHiddenInjection = document.getElementById("browser-hidden-injection");
-  const browserHiddenTextContent = document.getElementById("browser-hidden-text-content");
-  const btnToggleHiddenText = document.getElementById("btn-toggle-hidden-text");
-  const browserStoreIndicator = document.getElementById("browser-store-indicator");
-
-  // Candidates & Inline Signing
-  const candidatesContainer = document.getElementById("candidates-container");
-  const inlineSignPanel = document.getElementById("inline-sign-panel");
-  const signCandTitle = document.getElementById("sign-cand-title");
-  const signCandMerchant = document.getElementById("sign-cand-merchant");
-  const signCandTotal = document.getElementById("sign-cand-total");
-  const signMaxDollars = document.getElementById("sign-max-dollars");
-  const btnInlineSign = document.getElementById("btn-inline-sign");
-
-  // Payment result
-  const paymentResultBox = document.getElementById("payment-result-box");
-  const paymentResultAmount = document.getElementById("payment-result-amount");
-  const paymentResultDetails = document.getElementById("payment-result-details");
-  const btnViewEvidenceFromRun = document.getElementById("btn-view-evidence-from-run");
-
-  // Step-up modal
-  const stepupIntervenePanel = document.getElementById("stepup-intervene-panel");
-  const stepupProdTitle = document.getElementById("stepup-prod-title");
-  const stepupSellerName = document.getElementById("stepup-seller-name");
-  const stepupQuotedPrice = document.getElementById("stepup-quoted-price");
-  const stepupReasonsList = document.getElementById("stepup-reasons-list");
-  const btnStepupApprove = document.getElementById("btn-stepup-approve");
-  const btnStepupReject = document.getElementById("btn-stepup-reject");
-
-  // Contract summary pane elements
-  const contractBadgeHash = document.getElementById("contract-badge-hash");
-  const budgetMeterText = document.getElementById("budget-meter-text");
-  const budgetMeterFill = document.getElementById("budget-meter-fill");
-  const summaryMaxPrice = document.getElementById("summary-max-price");
-  const summaryMaxQty = document.getElementById("summary-max-qty");
-  const summarySubscriptions = document.getElementById("summary-subscriptions");
-  const summaryGiftcards = document.getElementById("summary-giftcards");
-  const summaryUnverified = document.getElementById("summary-unverified");
-  const summaryExpiry = document.getElementById("summary-expiry");
-
-  // Attack lab elements
-  const attackForm = document.getElementById("attack-form");
-  const attackStore = document.getElementById("attack-store");
-  const attackProduct = document.getElementById("attack-product");
-  const attackPlacement = document.getElementById("attack-placement");
-  const attackInstruction = document.getElementById("attack-instruction");
-  const btnPlantAttack = document.getElementById("btn-plant-attack");
-
-  // Evidence elements
-  const btnVerifyCrypto = document.getElementById("btn-verify-crypto");
-  const cryptoStatusBadge = document.getElementById("crypto-status-badge");
-  const evReceiptId = document.getElementById("ev-receipt-id");
-  const evPaymentId = document.getElementById("ev-payment-id");
-  const evContractId = document.getElementById("ev-contract-id");
-  const evMerchantId = document.getElementById("ev-merchant-id");
-  const evVerdict = document.getElementById("ev-verdict");
-  const evMoneyMoved = document.getElementById("ev-money-moved");
-  const evSigStatus = document.getElementById("ev-sig-status");
-  const evChainStatus = document.getElementById("ev-chain-status");
 
   // --- API Client ---
   async function apiGet(endpoint) {
     const res = await fetch(endpoint);
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error || `HTTP ${res.status}: ${res.statusText}`);
+    }
     return res.json();
   }
 
@@ -155,677 +166,684 @@
       body: JSON.stringify(data),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `HTTP ${res.status}: ${res.statusText}`);
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error || `HTTP ${res.status}: ${res.statusText}`);
     }
     return res.json();
   }
 
-  // --- View Navigation ---
-  function switchView(viewName) {
-    if (!views[viewName]) return;
-    state.currentView = viewName;
-
-    Object.keys(views).forEach((v) => {
-      views[v].classList.toggle("active", v === viewName);
+  // --- Step Indicator Navigation UI ---
+  function updateStepIndicator(step) {
+    state.currentStep = step;
+    const items = [el.stepNav1, el.stepNav2, el.stepNav3, el.stepNav4];
+    items.forEach((item, idx) => {
+      const num = idx + 1;
+      item.classList.remove("active", "completed");
+      if (num === step) {
+        item.classList.add("active");
+      } else if (num < step) {
+        item.classList.add("completed");
+      }
     });
-
-    navButtons.forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.view === viewName);
-    });
-
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  navButtons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      switchView(btn.dataset.view);
-    });
-  });
+  function scrollToSection(sectionEl) {
+    if (!sectionEl) return;
+    sectionEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
-  // --- System Status ---
-  async function refreshStatus() {
+  // --- System Status Polling ---
+  async function refreshSystemStatus() {
     try {
       const status = await apiGet("/api/status");
       state.systemStatus = status;
 
-      gatewayStatusLabel.textContent = status.gateway;
-      paymentModeLabel.textContent = status.paymentMode;
-
-      const isJudgeConnected = status.aiJudge === "CONNECTED";
-      judgeStatusLabel.textContent = status.aiJudge;
-      judgeStatusDot.className = isJudgeConnected ? "status-dot green" : "status-dot amber";
-
-      if (judgeWarningBanner) {
-        judgeWarningBanner.style.display = isJudgeConnected ? "none" : "block";
+      // Update gateway
+      if (status.gateway === "READY") {
+        el.gatewayDot.className = "status-dot green";
+        el.gatewayStatus.textContent = "READY";
+      } else {
+        el.gatewayDot.className = "status-dot red";
+        el.gatewayStatus.textContent = status.gateway;
       }
-    } catch (err) {
-      console.warn("Failed to refresh status:", err);
-      gatewayStatusDot.className = "status-dot red";
-      gatewayStatusLabel.textContent = "OFFLINE";
+
+      // Update AI judge
+      const isJudgeConn = status.aiJudge === "CONNECTED";
+      el.judgeDot.className = isJudgeConn ? "status-dot green" : "status-dot red";
+      el.judgeStatus.textContent = status.aiJudge;
+      el.demoJudgeLabel.className = `badge-status ${isJudgeConn ? "green" : "red"}`;
+      el.demoJudgeLabel.textContent = status.aiJudge;
+      el.btnToggleJudge.textContent = isJudgeConn
+        ? "Toggle to Disconnected / Unavailable"
+        : "Toggle to Connected";
+
+      // Check stores
+      let anyOffline = false;
+      const offlineNames = [];
+      const storeMap = {
+        novamart: { dot: el.novamartDot, label: el.novamartStatus },
+        dealdemon: { dot: el.dealdemonDot, label: el.dealdemonStatus },
+        peermarket: { dot: el.peermarketDot, label: el.peermarketStatus },
+      };
+
+      for (const s of status.stores) {
+        const item = storeMap[s.id];
+        if (item) {
+          const isOnline = s.online !== false;
+          item.dot.className = isOnline ? "status-dot green" : "status-dot red";
+          item.label.textContent = isOnline ? "ONLINE" : "OFFLINE";
+          if (!isOnline) {
+            anyOffline = true;
+            offlineNames.push(s.name);
+          }
+        }
+      }
+
+      if (anyOffline) {
+        el.storeOfflineBanner.classList.remove("hidden");
+        el.offlineStoreName.textContent = `${offlineNames.join(", ")} is offline.`;
+        el.btnAskAgent.disabled = true;
+      } else {
+        el.storeOfflineBanner.classList.add("hidden");
+        if (!state.busy) el.btnAskAgent.disabled = false;
+      }
+    } catch {
+      // Backend temporarily unreachable
     }
   }
 
-  if (toggleJudgeBtn) {
-    toggleJudgeBtn.addEventListener("click", async () => {
-      const current = state.systemStatus?.aiJudge || "CONNECTED";
-      const next = current === "CONNECTED" ? "UNAVAILABLE" : "CONNECTED";
-      try {
-        const updated = await apiPost("/api/status/judge", { status: next });
-        state.systemStatus = updated;
-        refreshStatus();
-      } catch (err) {
-        alert("Could not toggle judge: " + err.message);
-      }
-    });
-  }
+  // --- Step 1: Start Discovery ---
+  async function startDiscoveryFlow() {
+    if (state.busy) return;
+    const prompt = el.promptInput.value.trim();
+    if (!prompt) return;
 
-  // --- Quick Prompt Chips ---
-  document.querySelectorAll(".prompt-chips-row .preset-chip-btn").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      const p = chip.getAttribute("data-prompt");
-      if (p) promptInput.value = p;
-    });
-  });
+    // Increment generation to cancel and isolate from any previous runs
+    state.generation++;
+    const currentGen = state.generation;
 
-  // --- Start Discovery (Core Phase 7 Agent Flow) ---
-  async function startAgentDiscovery(promptText) {
-    stopPolling();
-    state.events = [];
-    state.lastSeq = 0;
+    // Clear previous state completely
+    stopEventPolling();
+    state.runId = null;
+    state.afterSeq = 0;
+    state.latestRun = null;
+    state.candidates = [];
+    state.agentPickId = null;
     state.selectedCandidateId = null;
+    state.selectedOnServerId = null;
+    state.lastDecision = null;
+    state.receiptId = null;
+    state.evidenceResult = null;
+    state.busy = true;
 
-    timelineList.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; text-align: center; padding: 20px;">Agent initiating search across stores...</div>`;
-    candidatesContainer.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; text-align: center; padding: 20px;">Searching NovaMart, DealDemon, and PeerMarket...</div>`;
-    paymentResultBox.style.display = "none";
-    if (inlineSignPanel) inlineSignPanel.style.display = "none";
-    if (stepupIntervenePanel) stepupIntervenePanel.style.display = "none";
-
-    switchView("run");
+    // Reset UI
+    updateStepIndicator(1);
+    el.btnAskAgent.disabled = true;
+    el.shopStatusText.classList.remove("hidden");
+    el.sectionCandidates.classList.add("hidden");
+    el.sectionContract.classList.add("hidden");
+    el.sectionDecision.classList.add("hidden");
+    el.noCandidatesBox.classList.add("hidden");
+    el.candidatesContainer.innerHTML = "";
+    el.decisionBanner.innerHTML = "";
+    el.timelineList.innerHTML = `<div class="empty-state">Searching storefronts…</div>`;
+    el.timelineCount.textContent = "0";
+    el.timelineRunId.textContent = "initializing…";
+    el.rawJsonViewer.textContent = "{}";
 
     try {
-      const res = await apiPost("/api/discovery/start", { prompt: promptText });
-      if (!res.candidates || res.candidates.length === 0) {
-        throw new Error("No candidates were returned by the storefronts.");
-      }
-      state.currentRun = res.run;
-      state.candidates = res.candidates;
+      const data = await apiPost("/api/discovery/start", { prompt });
+      if (state.generation !== currentGen) return; // Late response from cancelled run
 
-      renderRunState(res.run, res.candidates);
-      startPolling(res.run.id);
+      // Handle banana or no candidates found
+      if (data.status === "NO_CANDIDATES" || !data.candidates || data.candidates.length === 0) {
+        el.sectionCandidates.classList.remove("hidden");
+        el.noCandidatesBox.classList.remove("hidden");
+        el.noCandidatesMsg.textContent = data.message || "No matching candidates found for that prompt.";
+        updateStepIndicator(2);
+        scrollToSection(el.sectionCandidates);
+        return;
+      }
+
+      state.runId = data.run.id;
+      state.latestRun = data.run;
+      state.candidates = data.candidates;
+      el.timelineRunId.textContent = state.runId;
+      el.rawJsonViewer.textContent = JSON.stringify(data, null, 2);
+
+      // Auto-select agent pick (Rank #1)
+      state.agentPickId = data.candidates[0].id;
+      state.selectedCandidateId = state.agentPickId;
+
+      // Render candidates
+      renderCandidates();
+      el.sectionCandidates.classList.remove("hidden");
+      updateStepIndicator(2);
+
+      // Immediately render Section 3 (Review Contract) from top candidate
+      updateContractSection();
+      el.sectionContract.classList.remove("hidden");
+
+      // Start live polling of events
+      startEventPolling();
+
+      // Scroll to candidates
+      scrollToSection(el.sectionCandidates);
     } catch (err) {
-      state.currentRun = null;
-      state.candidates = [];
-      state.selectedCandidateId = null;
-      if (inlineSignPanel) inlineSignPanel.style.display = "none";
-      if (stepupIntervenePanel) stepupIntervenePanel.style.display = "none";
-      candidatesContainer.innerHTML = `
-        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; border-radius: var(--radius-md); padding: 20px; text-align: center; color: #fca5a5;">
-          <strong>Discovery Error:</strong> ${escapeHtml(err.message)}
-          <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
-            Please ensure search terms match store catalog categories (e.g. headphones, jacket, shoes, backpack) and live stores are reachable on ports 8801, 8802, 8803.
-          </div>
-        </div>
-      `;
-      timelineList.innerHTML = `<div style="color: #ef4444; font-size: 13px; text-align: center; padding: 20px;">Discovery halted: ${escapeHtml(err.message)}</div>`;
+      if (state.generation !== currentGen) return;
+      el.sectionCandidates.classList.remove("hidden");
+      el.noCandidatesBox.classList.remove("hidden");
+      el.noCandidatesMsg.textContent = err.message || "Discovery failed.";
+      updateStepIndicator(2);
+    } finally {
+      if (state.generation === currentGen) {
+        state.busy = false;
+        el.btnAskAgent.disabled = false;
+        el.shopStatusText.classList.add("hidden");
+      }
     }
   }
 
-  if (btnDraftContract) {
-    btnDraftContract.addEventListener("click", async () => {
-      const promptText = promptInput.value.trim();
-      if (!promptText) return;
-      btnDraftContract.disabled = true;
-      btnDraftContract.textContent = "Agent Searching Stores...";
-      try {
-        await startAgentDiscovery(promptText);
-      } finally {
-        btnDraftContract.disabled = false;
-        btnDraftContract.textContent = "Start Agent Discovery & Shopping ➔";
+  // --- Step 2: Render Candidates ---
+  function renderCandidates() {
+    el.candidatesContainer.innerHTML = "";
+
+    state.candidates.forEach((cand, idx) => {
+      const isAgentPick = cand.id === state.agentPickId;
+      const isSelected = cand.id === state.selectedCandidateId;
+
+      const card = document.createElement("div");
+      card.className = `candidate-card ${isAgentPick ? "agent-pick" : ""} ${isSelected ? "selected" : ""}`;
+      card.dataset.candidateId = cand.id;
+
+      // Badges
+      let tagsHtml = "";
+      if (cand.seller && cand.seller.verified) {
+        tagsHtml += `<span class="tag-verified">✓ Verified Seller</span>`;
+      } else {
+        tagsHtml += `<span class="tag-risk">⚠️ Unverified Seller</span>`;
       }
+
+      if (cand.terms) {
+        if (cand.terms.finalSale) tagsHtml += `<span class="tag-warning">Final Sale (No Returns)</span>`;
+        if (cand.terms.subscription) tagsHtml += `<span class="tag-risk">Recurring Subscription</span>`;
+        if (cand.terms.dripPricing) tagsHtml += `<span class="tag-risk">Drip Pricing / Extra Fees</span>`;
+      }
+
+      card.innerHTML = `
+        <div class="candidate-card-header">
+          <div>
+            ${isAgentPick ? `<span class="pick-badge">⭐ Agent's pick — Rank #1</span>` : `<span class="pick-badge" style="background:#475569;">Alternative — Rank #${idx + 1}</span>`}
+            <div class="candidate-store-name" style="margin-top: 4px;">Store: <strong>${escapeHtml(cand.merchantDisplayName || cand.merchantId)}</strong></div>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted);">SKU: ${escapeHtml(cand.sku)}</div>
+        </div>
+
+        <div class="candidate-product-title">${escapeHtml(cand.productName)}</div>
+
+        <div class="candidate-price-row">
+          <div class="candidate-allin-price">${formatCents(cand.quoteTotalCents || cand.advertisedTotalCents)}</div>
+          <div class="candidate-unit-price">All-in total with tax &amp; shipping</div>
+        </div>
+
+        <div class="candidate-tags">${tagsHtml}</div>
+
+        <div class="candidate-actions">
+          <div style="font-size: 12px; color: var(--text-muted);">
+            ${isSelected ? `<strong style="color:#10b981;">✓ Selected for Spending Contract</strong>` : `Candidate ID: <code style="font-size:10px;">${escapeHtml(cand.id)}</code>`}
+          </div>
+          ${!isSelected ? `<button type="button" class="btn-use-instead" data-candidate-id="${escapeHtml(cand.id)}">Use this instead</button>` : ""}
+        </div>
+      `;
+
+      el.candidatesContainer.appendChild(card);
+    });
+
+    // Attach click events for "Use this instead"
+    const buttons = el.candidatesContainer.querySelectorAll(".btn-use-instead");
+    buttons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const candidateId = btn.dataset.candidateId;
+        selectCandidateOverride(candidateId);
+      });
     });
   }
 
-  // --- Polling Events using afterSeq ---
-  function startPolling(runId) {
-    stopPolling();
-    pollEvents(runId);
-    state.pollTimer = setInterval(() => pollEvents(runId), 1000);
+  // --- Candidate Override Selection ---
+  function selectCandidateOverride(candidateId) {
+    if (state.selectedCandidateId === candidateId) return;
+    state.selectedCandidateId = candidateId;
+
+    // Invalidate prior decision and evidence
+    state.lastDecision = null;
+    state.receiptId = null;
+    state.evidenceResult = null;
+    el.sectionDecision.classList.add("hidden");
+    el.decisionBanner.innerHTML = "";
+
+    // Re-render candidates to update selection badge
+    renderCandidates();
+
+    // Rebuild contract section from newly selected candidate
+    updateContractSection();
+    updateStepIndicator(3);
+    scrollToSection(el.sectionContract);
   }
 
-  function stopPolling() {
+  // --- Step 3: Update Contract Section ---
+  function updateContractSection() {
+    const candidate = state.candidates.find((c) => c.id === state.selectedCandidateId);
+    if (!candidate) return;
+
+    el.contractProductName.textContent = candidate.productName;
+    el.contractMerchantName.textContent = candidate.merchantDisplayName || candidate.merchantId;
+    el.contractQuantity.textContent = candidate.quantity || 1;
+    const expectedCents = candidate.quoteTotalCents || candidate.advertisedTotalCents;
+    el.contractExpectedTotal.textContent = formatCents(expectedCents);
+    el.contractAllowedPayee.textContent = candidate.merchantDisplayName || candidate.merchantId;
+
+    // Check cap warning
+    checkCapWarning(expectedCents);
+  }
+
+  function checkCapWarning(expectedCents) {
+    const capDollars = parseFloat(el.inputCapDollars.value) || 0;
+    const capCents = Math.round(capDollars * 100);
+    el.capCentsLabel.textContent = `= ${capCents.toLocaleString()} cents`;
+
+    const budgetDollars = parseFloat(el.inputBudgetDollars.value) || 0;
+    const budgetCents = Math.round(budgetDollars * 100);
+    el.budgetCentsLabel.textContent = `= ${budgetCents.toLocaleString()} cents`;
+
+    if (expectedCents && capCents > 0 && expectedCents > capCents) {
+      el.capWarning.classList.remove("hidden");
+    } else {
+      el.capWarning.classList.add("hidden");
+    }
+  }
+
+  // --- Step 3: Sign & Submit for Payment Check ---
+  async function signAndSubmitFlow() {
+    if (state.busy) return;
+    if (!state.runId || !state.selectedCandidateId) return;
+
+    const budgetDollars = parseFloat(el.inputBudgetDollars.value);
+    const capDollars = parseFloat(el.inputCapDollars.value);
+    if (isNaN(budgetDollars) || budgetDollars <= 0 || isNaN(capDollars) || capDollars <= 0) {
+      alert("Please enter valid positive dollar amounts for budget and per-order cap.");
+      return;
+    }
+
+    const maxBudgetCents = Math.round(budgetDollars * 100);
+    const perOrderCapCents = Math.round(capDollars * 100);
+
+    // Double-click protection
+    state.busy = true;
+    el.btnSignSubmit.disabled = true;
+    el.signSubmittingSpinner.classList.remove("hidden");
+
+    try {
+      // 1. Ensure selection on server if not done yet
+      if (state.selectedOnServerId !== state.selectedCandidateId) {
+        await apiPost(`/api/run/${encodeURIComponent(state.runId)}/select`, {
+          candidateId: state.selectedCandidateId,
+        });
+        state.selectedOnServerId = state.selectedCandidateId;
+      }
+
+      // 2. Submit signed contract and quote to gateway
+      const result = await apiPost(`/api/run/${encodeURIComponent(state.runId)}/sign-and-submit`, {
+        candidateId: state.selectedCandidateId,
+        limits: {
+          maxBudgetCents,
+          perOrderCapCents,
+          noSubscriptions: el.checkNoSubs.checked,
+          noGiftCards: el.checkNoCards.checked,
+        },
+      });
+
+      state.latestRun = result.run;
+      el.rawJsonViewer.textContent = JSON.stringify(result, null, 2);
+
+      // Render Section 4 Decision
+      renderDecision(result.run.decision);
+      el.sectionDecision.classList.remove("hidden");
+      updateStepIndicator(4);
+      scrollToSection(el.sectionDecision);
+    } catch (err) {
+      alert(`Submission failed: ${err.message}`);
+    } finally {
+      state.busy = false;
+      el.btnSignSubmit.disabled = false;
+      el.signSubmittingSpinner.classList.add("hidden");
+    }
+  }
+
+  // --- Step 4: Render Decision Banner ---
+  function renderDecision(decision) {
+    if (!decision) return;
+    state.lastDecision = decision;
+
+    const candidate = state.candidates.find((c) => c.id === state.selectedCandidateId) || state.candidates[0];
+    const merchantName = candidate ? (candidate.merchantDisplayName || candidate.merchantId) : "Merchant";
+    const outcome = decision.outcome;
+
+    if (outcome === "ALLOW") {
+      state.receiptId = decision.receiptId;
+      el.decisionBanner.className = "decision-banner allow";
+      el.decisionBanner.innerHTML = `
+        <div class="verdict-headline">
+          <span>✓</span>
+          <span>APPROVED — ${formatCents(decision.computedTotalCents)} captured</span>
+        </div>
+        <div class="verdict-body">
+          The payment strictly complies with all terms of the signed Intent Contract. Mock PSP executed the transaction for the exact verified store quote.
+        </div>
+        <div class="verdict-meta-grid">
+          <div><span class="field-label">Merchant</span><br><strong>${escapeHtml(merchantName)}</strong></div>
+          <div><span class="field-label">Captured Amount</span><br><strong style="color:#10b981;">${formatCents(decision.computedTotalCents)}</strong></div>
+          <div><span class="field-label">Receipt ID</span><br><code style="font-size:11px;">${escapeHtml(decision.receiptId || "rcpt_mock_001")}</code></div>
+          <div><span class="field-label">Engine Verdict</span><br><strong>ALLOW</strong></div>
+        </div>
+        <div class="verdict-actions-row">
+          <button type="button" id="btn-verify-evidence" class="btn-primary">Verify Evidence</button>
+          <span style="font-size:12px; color:var(--text-muted);">Independent cryptographic audit of public key and hash chain</span>
+        </div>
+        <div id="evidence-display-area" class="hidden"></div>
+      `;
+
+      // Wire Verify Evidence button
+      const btnVerify = document.getElementById("btn-verify-evidence");
+      if (btnVerify) {
+        btnVerify.addEventListener("click", verifyEvidenceFlow);
+      }
+    } else if (outcome === "STEP_UP") {
+      el.decisionBanner.className = "decision-banner stepup";
+      const reasons = (decision.reasonCodes || []).map(mapReasonCodeToPlainEnglish).join(" ");
+      el.decisionBanner.innerHTML = `
+        <div class="verdict-headline">
+          <span>⚠️</span>
+          <span>HUMAN REVIEW NEEDED — $0 captured so far</span>
+        </div>
+        <div class="verdict-body">
+          ${escapeHtml(reasons || "The purchase contains risky terms (such as an unverified seller or final-sale terms) that require explicit human approval.")}
+        </div>
+        <div class="verdict-meta-grid">
+          <div><span class="field-label">Merchant</span><br><strong>${escapeHtml(merchantName)}</strong></div>
+          <div><span class="field-label">Pending Total</span><br><strong>${formatCents(decision.computedTotalCents || candidate.quoteTotalCents)}</strong></div>
+          <div><span class="field-label">Captured So Far</span><br><strong style="color:#f59e0b;">$0.00</strong></div>
+          <div><span class="field-label">Status</span><br><strong>STEP_UP_REQUIRED</strong></div>
+        </div>
+        <div class="verdict-actions-row">
+          <button type="button" id="btn-stepup-approve" class="btn-primary">Approve &amp; Pay</button>
+          <button type="button" id="btn-stepup-reject" class="btn-danger">Reject — Do Not Pay</button>
+        </div>
+      `;
+
+      // Wire STEP_UP buttons
+      document.getElementById("btn-stepup-approve").addEventListener("click", () => decideStepUpFlow("APPROVE"));
+      document.getElementById("btn-stepup-reject").addEventListener("click", () => decideStepUpFlow("REJECT"));
+    } else if (outcome === "BLOCK") {
+      el.decisionBanner.className = "decision-banner block";
+      const reasons = (decision.reasonCodes || []).map(mapReasonCodeToPlainEnglish).join(" ");
+      el.decisionBanner.innerHTML = `
+        <div class="verdict-headline">
+          <span>🛑</span>
+          <span>BLOCKED — $0 captured</span>
+        </div>
+        <div class="verdict-body">
+          ${escapeHtml(reasons || "The purchase violated policy terms specified in your signed Intent Contract. No money was moved.")}
+        </div>
+        <div class="verdict-meta-grid">
+          <div><span class="field-label">Merchant</span><br><strong>${escapeHtml(merchantName)}</strong></div>
+          <div><span class="field-label">Captured Amount</span><br><strong style="color:#ef4444;">$0.00</strong></div>
+          <div><span class="field-label">PSP Action</span><br><strong>PAYMENT NOT ATTEMPTED</strong></div>
+          <div><span class="field-label">Reason Code</span><br><code style="font-size:11px;">${escapeHtml((decision.reasonCodes || []).join(", ") || "POLICY_VIOLATION")}</code></div>
+        </div>
+        <div class="verdict-actions-row">
+          <button type="button" id="btn-try-another" class="btn-secondary">Try Another Candidate</button>
+          <span style="font-size:12px; color:var(--text-muted);">Select a safe candidate (like NovaMart) to continue</span>
+        </div>
+      `;
+
+      document.getElementById("btn-try-another").addEventListener("click", () => {
+        scrollToSection(el.sectionCandidates);
+      });
+    } else {
+      // TAMPER_REJECT
+      el.decisionBanner.className = "decision-banner tamper";
+      el.decisionBanner.innerHTML = `
+        <div class="verdict-headline">
+          <span>🛡️</span>
+          <span>INTEGRITY CHECK FAILED — $0 captured</span>
+        </div>
+        <div class="verdict-body">
+          Upstream cryptographic verification failed. The merchant quote signature or total did not match the store's issued quote.
+        </div>
+        <div class="verdict-meta-grid">
+          <div><span class="field-label">Merchant</span><br><strong>${escapeHtml(merchantName)}</strong></div>
+          <div><span class="field-label">Captured Amount</span><br><strong style="color:#a855f7;">$0.00</strong></div>
+          <div><span class="field-label">Integrity Status</span><br><strong>TAMPER_REJECTED</strong></div>
+        </div>
+      `;
+    }
+  }
+
+  // --- Step-Up Decision Flow (Approve or Reject) ---
+  async function decideStepUpFlow(decision) {
+    if (state.busy || !state.runId) return;
+    state.busy = true;
+
+    const btnApprove = document.getElementById("btn-stepup-approve");
+    const btnReject = document.getElementById("btn-stepup-reject");
+    if (btnApprove) btnApprove.disabled = true;
+    if (btnReject) btnReject.disabled = true;
+
+    try {
+      const res = await apiPost(`/api/run/${encodeURIComponent(state.runId)}/step-up`, { decision });
+      state.latestRun = res.run;
+      el.rawJsonViewer.textContent = JSON.stringify(res, null, 2);
+
+      if (decision === "APPROVE") {
+        renderDecision(res.run.decision);
+      } else {
+        // Human rejected
+        el.decisionBanner.className = "decision-banner block";
+        el.decisionBanner.innerHTML = `
+          <div class="verdict-headline">
+            <span>🛑</span>
+            <span>REJECTED — $0.00 captured</span>
+          </div>
+          <div class="verdict-body">
+            You rejected the step-up payment request. The transaction was aborted and $0 was captured.
+          </div>
+          <div class="verdict-meta-grid">
+            <div><span class="field-label">Final Captured Amount</span><br><strong style="color:#ef4444;">$0.00</strong></div>
+            <div><span class="field-label">Status</span><br><strong>ABORTED_BY_USER</strong></div>
+          </div>
+        `;
+      }
+    } catch (err) {
+      alert(`Decision failed: ${err.message}`);
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  // --- Evidence Verification Flow ---
+  async function verifyEvidenceFlow() {
+    if (!state.receiptId) return;
+    const area = document.getElementById("evidence-display-area");
+    if (!area) return;
+
+    area.classList.remove("hidden");
+    area.innerHTML = `Verifying cryptographic signature and receipt hash chain…`;
+
+    try {
+      const result = await apiPost("/api/evidence/verify", { receiptId: state.receiptId });
+      state.evidenceResult = result;
+
+      if (result.valid) {
+        area.className = "evidence-result-box";
+        area.innerHTML = `
+          <strong>✓ EVIDENCE VALID</strong><br>
+          • Ed25519 Signature Check: <strong>PASSED</strong><br>
+          • Cryptographic Hash Chain: <strong>PASSED</strong><br>
+          • Receipts in Chain: <strong>VERIFIED</strong>
+        `;
+      } else {
+        area.className = "evidence-result-box";
+        area.style.borderColor = "#ef4444";
+        area.style.color = "#fca5a5";
+        area.innerHTML = `
+          <strong>⚠️ EVIDENCE VERIFICATION FAILED</strong><br>
+          Failures: ${escapeHtml((result.failures || []).join(", "))}
+        `;
+      }
+    } catch (err) {
+      area.className = "evidence-result-box";
+      area.style.borderColor = "#ef4444";
+      area.style.color = "#fca5a5";
+      area.innerHTML = `Verification error: ${escapeHtml(err.message)}`;
+    }
+  }
+
+  // --- Polling Events with afterSeq ---
+  function startEventPolling() {
+    stopEventPolling();
+    pollEvents();
+    state.pollTimer = setInterval(pollEvents, 1200);
+  }
+
+  function stopEventPolling() {
     if (state.pollTimer) {
       clearInterval(state.pollTimer);
       state.pollTimer = null;
     }
   }
 
-  async function pollEvents(runId) {
+  async function pollEvents() {
+    if (!state.runId) return;
     try {
-      const res = await apiGet(`/api/run/${encodeURIComponent(runId)}/events?afterSeq=${state.lastSeq}`);
-      if (res.events && res.events.length > 0) {
-        res.events.forEach((ev) => {
-          state.events.push(ev);
-          state.lastSeq = Math.max(state.lastSeq, ev.seq);
-        });
-        renderTimeline(state.events);
+      const res = await apiGet(`/api/run/${encodeURIComponent(state.runId)}/events?afterSeq=${state.afterSeq}`);
+      if (!res.events || res.events.length === 0) return;
+
+      if (state.afterSeq === 0) {
+        el.timelineList.innerHTML = "";
       }
 
-      // Check for run state updates
-      const runRes = await apiGet(`/api/run/${encodeURIComponent(runId)}`);
-      if (runRes && runRes.run) {
-        state.currentRun = runRes.run;
-        state.candidates = runRes.candidates;
-        renderRunState(runRes.run, runRes.candidates);
+      res.events.forEach((ev) => {
+        state.afterSeq = Math.max(state.afterSeq, ev.seq);
+        const item = document.createElement("div");
+        item.className = "timeline-item";
+        item.innerHTML = `
+          <div>
+            <span class="timeline-actor-tag">${escapeHtml(ev.actor || "SYS")}</span>
+            <strong>${escapeHtml(ev.type || "EVENT")}</strong>: ${escapeHtml(ev.message || "")}
+          </div>
+          <span style="font-size:10px; color:var(--text-muted);">${new Date(ev.ts).toLocaleTimeString()}</span>
+        `;
+        el.timelineList.appendChild(item);
+      });
 
-        if (runRes.run.status === "COMPLETED") {
-          stopPolling();
+      el.timelineCount.textContent = state.afterSeq.toString();
+
+      // Check if run reached a terminal state
+      if (state.latestRun) {
+        const s = state.latestRun.status;
+        if (s === "COMPLETED" || s === "FAILED" || s === "STEP_UP_REQUIRED") {
+          // Stop polling once run is in final or waiting state
+          if (s === "COMPLETED" || s === "FAILED") {
+            stopEventPolling();
+          }
         }
       }
-    } catch (err) {
-      console.warn("Polling error:", err);
+    } catch {
+      // Ignore polling errors
     }
   }
 
-  // --- Candidate Selection ---
-  async function selectCandidate(candidateId) {
-    if (!state.currentRun) {
-      alert("No active run. Please start discovery first.");
-      return;
-    }
-    if (state.currentRun.status !== "AWAITING_SELECTION") {
-      alert(`Candidate selection is only allowed when awaiting selection (current status: ${state.currentRun.status}).`);
-      return;
-    }
-    try {
-      const res = await apiPost(`/api/run/${encodeURIComponent(state.currentRun.id)}/select`, { candidateId });
-      state.currentRun = res.run;
-      state.candidates = res.candidates;
-      state.selectedCandidateId = candidateId;
+  // --- Attack Lab ---
+  async function plantAttackFlow() {
+    const storeId = el.attackStore.value;
+    const productSku = el.attackSku.value.trim();
+    const placement = el.attackPlacement.value;
+    const instruction = el.attackInstruction.value.trim();
 
-      renderRunState(res.run, res.candidates);
-      pollEvents(state.currentRun.id);
-    } catch (err) {
-      alert("Failed to select candidate: " + err.message);
-    }
-  }
-
-  // --- Host Bridge: Compile and Sign Spending Contract ---
-  async function signAndSubmitContract(limits) {
-    if (!state.currentRun || !state.currentRun.selectedCandidateId) {
-      alert("No candidate selected. Please select a candidate before signing.");
+    if (!productSku || !instruction) {
+      alert("SKU and instruction are required.");
       return;
-    }
-    if (state.currentRun.status !== "AWAITING_SIGNATURE") {
-      alert(`Cannot sign contract: run is in state '${state.currentRun.status}', awaiting selection.`);
-      return;
-    }
-    if (btnInlineSign) {
-      btnInlineSign.disabled = true;
-      btnInlineSign.textContent = "Compiling & Signing with Ed25519...";
     }
 
     try {
-      const res = await apiPost(`/api/run/${encodeURIComponent(state.currentRun.id)}/sign`, { limits });
-      state.currentRun = res.run;
-      state.candidates = res.candidates;
-
-      if (res.contract) {
-        updateContractSummary(res.contract);
-      }
-
-      renderRunState(res.run, res.candidates);
-      pollEvents(state.currentRun.id);
+      const res = await apiPost("/api/attack/plant", {
+        storeId,
+        productSku,
+        placement,
+        instruction,
+      });
+      el.attackStatusMsg.classList.remove("hidden");
+      el.attackStatusMsg.textContent = res.message || "Attack registered successfully!";
+      setTimeout(() => el.attackStatusMsg.classList.add("hidden"), 5000);
     } catch (err) {
-      alert("Contract execution failed: " + err.message);
-    } finally {
-      if (btnInlineSign) {
-        btnInlineSign.disabled = false;
-        btnInlineSign.textContent = "✍ Sign Contract & Authorize Gateway Execution ➔";
-      }
+      alert(`Attack registration failed: ${err.message}`);
     }
   }
 
-  if (btnInlineSign) {
-    btnInlineSign.addEventListener("click", () => {
-      const dollars = parseFloat(signMaxDollars.value) || 70;
-      const cents = Math.round(dollars * 100);
-      signAndSubmitContract({
-        maxBudgetCents: cents,
-        perOrderCapCents: cents,
-        noSubscriptions: true,
-        noGiftCards: true,
-        unverifiedSellerRule: "ASK_ME",
-        expiryMinutes: 15,
+  // --- Judge Toggle ---
+  async function toggleJudgeFlow() {
+    const current = state.systemStatus ? state.systemStatus.aiJudge : "CONNECTED";
+    const next = current === "CONNECTED" ? "UNAVAILABLE" : "CONNECTED";
+    try {
+      await apiPost("/api/status/judge", { status: next });
+      await refreshSystemStatus();
+    } catch (err) {
+      alert(`Toggle failed: ${err.message}`);
+    }
+  }
+
+  // --- Initialize Event Listeners ---
+  function init() {
+    // 1. Section 1 Shop Actions
+    el.btnAskAgent.addEventListener("click", startDiscoveryFlow);
+    el.promptInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        startDiscoveryFlow();
+      }
+    });
+
+    // Preset chips
+    el.promptChips.forEach((chip) => {
+      chip.addEventListener("click", () => {
+        el.promptInput.value = chip.dataset.prompt;
       });
     });
-  }
 
-  // Also hook up View 2 contract form
-  if (btnSignContract) {
-    btnSignContract.addEventListener("click", () => {
-      if (!state.currentRun || !state.currentRun.selectedCandidateId) {
-        alert("Please start discovery and select a candidate first.");
-        switchView("run");
-        return;
-      }
-      const dollars = parseFloat(ctMaxDollars.value) || 70;
-      const cents = Math.round(dollars * 100);
-      signAndSubmitContract({
-        maxBudgetCents: cents,
-        perOrderCapCents: cents,
-        noSubscriptions: ctNoSubs.checked,
-        noGiftCards: ctNoGiftCards.checked,
-        unverifiedSellerRule: ctUnverified.value,
-        expiryMinutes: parseInt(ctExpiry.value, 10) || 15,
-      });
-      switchView("run");
+    // 2. Section 3 Contract Actions
+    el.btnSignSubmit.addEventListener("click", signAndSubmitFlow);
+    el.inputCapDollars.addEventListener("input", () => {
+      const cand = state.candidates.find((c) => c.id === state.selectedCandidateId);
+      checkCapWarning(cand ? (cand.quoteTotalCents || cand.advertisedTotalCents) : 0);
     });
-  }
-
-  // --- STEP_UP Decision Handling ---
-  async function handleStepUpDecision(decision) {
-    if (!state.currentRun) return;
-    btnStepupApprove.disabled = true;
-    btnStepupReject.disabled = true;
-
-    try {
-      const res = await apiPost(`/api/run/${encodeURIComponent(state.currentRun.id)}/step-up`, { decision });
-      state.currentRun = res.run;
-      state.candidates = res.candidates;
-      renderRunState(res.run, res.candidates);
-      pollEvents(state.currentRun.id);
-    } catch (err) {
-      alert("Step-up resolution failed: " + err.message);
-    } finally {
-      btnStepupApprove.disabled = false;
-      btnStepupReject.disabled = false;
-    }
-  }
-
-  if (btnStepupApprove) {
-    btnStepupApprove.addEventListener("click", () => handleStepUpDecision("APPROVE"));
-  }
-  if (btnStepupReject) {
-    btnStepupReject.addEventListener("click", () => handleStepUpDecision("REJECT"));
-  }
-
-  // --- Rendering UI State ---
-  function renderRunState(run, candidates) {
-    if (!run) return;
-
-    timelineRunBadge.textContent = run.status;
-    timelineRunBadge.className = `brand-badge ${run.status === "COMPLETED" ? "green" : ""}`;
-
-    // Browser Pane (active or selected candidate)
-    const selectedCand = candidates.find((c) => c.id === run.selectedCandidateId) || candidates[0];
-    if (selectedCand) {
-      renderBrowserPane(selectedCand);
-      updateBudgetMeter(selectedCand.quoteTotalCents, 7000);
-    }
-
-    // Inline Sign Panel
-    if (run.status === "AWAITING_SIGNATURE" && selectedCand) {
-      inlineSignPanel.style.display = "block";
-      signCandTitle.textContent = selectedCand.productName;
-      signCandMerchant.textContent = selectedCand.merchantDisplayName;
-      signCandTotal.textContent = formatCents(selectedCand.quoteTotalCents);
-    } else {
-      inlineSignPanel.style.display = "none";
-    }
-
-    // Step-Up Panel
-    if (run.status === "PAUSED_STEP_UP" && selectedCand) {
-      stepupIntervenePanel.style.display = "block";
-      stepupProdTitle.textContent = selectedCand.productName;
-      stepupSellerName.textContent = `${selectedCand.merchantDisplayName} (Seller: ${selectedCand.seller.name})`;
-      stepupQuotedPrice.textContent = formatCents(selectedCand.quoteTotalCents);
-      stepupReasonsList.textContent = selectedCand.terms.finalSale
-        ? "PeerMarket Final Sale Listing (Tightened by AI Safety Review)"
-        : "Unverified Seller Policy Exception";
-    } else {
-      stepupIntervenePanel.style.display = "none";
-    }
-
-    // Payment Result Box
-    if (run.decision) {
-      paymentResultBox.style.display = "block";
-      if (run.decision.outcome === "ALLOW") {
-        const captured = run.decision.computedTotalCents ?? selectedCand?.quoteTotalCents ?? 0;
-        paymentResultAmount.textContent = `${formatCents(captured)} CAPTURED`;
-        paymentResultAmount.style.color = "#10b981";
-        paymentResultDetails.textContent = `Store: ${selectedCand?.merchantDisplayName || "Store"} | Mode: Mock PSP | PSP Status: COMPLETED`;
-        if (run.decision.receiptId) {
-          state.lastReceiptId = run.decision.receiptId;
-          updateEvidencePane(run.decision.receiptId, selectedCand, captured);
-        }
-      } else {
-        paymentResultAmount.textContent = "$0.00 CAPTURED";
-        paymentResultAmount.style.color = "#ef4444";
-        const reasons = run.decision.reasonCodes?.join(", ") || "Safety or contract rule triggered";
-        paymentResultDetails.textContent = `Verdict: ${run.decision.outcome} | Reasons: ${reasons} | Money Moved: $0.00`;
-      }
-    } else {
-      paymentResultBox.style.display = "none";
-    }
-
-    // Render candidate cards
-    renderCandidateCards(candidates, run);
-  }
-
-  function renderBrowserPane(cand) {
-    browserCurrentUrl.textContent = `https://${cand.merchantId}.internal/products/${cand.sku.toLowerCase()}`;
-    browserProductTitle.textContent = cand.productName;
-    browserAdvPrice.textContent = formatCents(cand.advertisedTotalCents);
-    browserMerchantName.textContent = cand.merchantDisplayName;
-    browserStoreIndicator.textContent = `Browsing: ${cand.merchantDisplayName}`;
-
-    // Untrusted page text is rendered via textContent for strict XSS prevention!
-    browserPageText.textContent = `Product SKU: ${cand.sku} | Seller: ${cand.seller.name} (${cand.seller.verified ? "Verified" : "Unverified"})\nWarranty: ${cand.terms.warranty} | Returns: ${cand.terms.returnPolicy}`;
-
-    if (cand.hiddenContent && cand.hiddenContent.length > 0) {
-      browserHiddenTextContent.textContent = cand.hiddenContent.join("\n");
-      browserHiddenInjection.classList.toggle("revealed", state.hiddenTextRevealed);
-    } else {
-      browserHiddenInjection.classList.remove("revealed");
-      browserHiddenTextContent.textContent = "";
-    }
-  }
-
-  if (btnToggleHiddenText) {
-    btnToggleHiddenText.addEventListener("click", () => {
-      state.hiddenTextRevealed = !state.hiddenTextRevealed;
-      btnToggleHiddenText.textContent = state.hiddenTextRevealed ? "🙈 Hide Hidden Text" : "👁️ Reveal Hidden Text";
-      if (browserHiddenInjection) {
-        browserHiddenInjection.classList.toggle("revealed", state.hiddenTextRevealed);
-      }
+    el.inputBudgetDollars.addEventListener("input", () => {
+      const cand = state.candidates.find((c) => c.id === state.selectedCandidateId);
+      checkCapWarning(cand ? (cand.quoteTotalCents || cand.advertisedTotalCents) : 0);
     });
+
+    // 3. Attack Lab & Demo Controls
+    el.btnPlantAttack.addEventListener("click", plantAttackFlow);
+    el.btnToggleJudge.addEventListener("click", toggleJudgeFlow);
+
+    // Initial system status check & interval
+    refreshSystemStatus();
+    setInterval(refreshSystemStatus, 3000);
   }
 
-  function renderTimeline(events) {
-    if (!events || events.length === 0) {
-      timelineList.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; text-align: center; padding: 20px;">No events yet.</div>`;
-      return;
-    }
-
-    timelineList.innerHTML = "";
-    events.forEach((ev) => {
-      const item = document.createElement("div");
-      item.className = "timeline-item";
-
-      const actorClass = (ev.actor || "AGENT").toLowerCase().replace(/[^a-z]/g, "");
-      const avatarLabel = ev.actor ? ev.actor.slice(0, 2).toUpperCase() : "AG";
-
-      item.innerHTML = `
-        <div class="actor-avatar ${actorClass}">${escapeHtml(avatarLabel)}</div>
-        <div class="timeline-content">
-          <div class="timeline-meta">
-            <span><strong>${escapeHtml(ev.actor)}</strong> <span style="font-size: 11px; color: var(--text-muted);">#${ev.seq}</span></span>
-            <span>${escapeHtml(ev.ts ? new Date(ev.ts).toLocaleTimeString() : "")}</span>
-          </div>
-          <div class="timeline-title">${escapeHtml(ev.type)}</div>
-          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">${escapeHtml(ev.message)}</div>
-        </div>
-      `;
-      timelineList.appendChild(item);
-    });
+  // Run on DOM ready
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
   }
-
-  function renderCandidateCards(candidates, run) {
-    candidatesContainer.innerHTML = "";
-    if (!candidates || candidates.length === 0) {
-      candidatesContainer.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; text-align: center; padding: 20px;">No candidates discovered yet.</div>`;
-      return;
-    }
-
-    candidates.forEach((cand, idx) => {
-      const card = document.createElement("div");
-      const isSelected = cand.id === run.selectedCandidateId;
-      const statusClass = cand.status.toLowerCase();
-      card.className = `candidate-card-wrapper ${statusClass} ${isSelected ? "selected-card" : ""}`;
-
-      let verdictBannerHtml = "";
-      if (cand.status === "ALLOWED") {
-        verdictBannerHtml = `
-          <div class="verdict-banner allow">
-            <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">Firewall Verdict: ALLOWED</div>
-            <div class="giant-captured-amount" style="color: #10b981;">${formatCents(cand.quoteTotalCents)} CAPTURED</div>
-            <div class="next-action-note" style="color: #34d399;">Order verified under spending contract. Valid receipt issued to signed ledger.</div>
-          </div>
-        `;
-      } else if (cand.status === "BLOCKED" || cand.status === "TAMPER_REJECTED") {
-        verdictBannerHtml = `
-          <div class="verdict-banner block">
-            <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">Firewall Verdict: ${escapeHtml(cand.status)}</div>
-            <div class="giant-captured-amount" style="color: #ef4444;">$0.00 CAPTURED</div>
-            <div class="next-action-note">Deterministic gateway rejected quote. Funds protected. Agent can try next candidate.</div>
-          </div>
-        `;
-      } else if (cand.status === "STEP_UP") {
-        verdictBannerHtml = `
-          <div class="verdict-banner stepup">
-            <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">Firewall Verdict: STEP_UP REQUIRED</div>
-            <div class="giant-captured-amount" style="color: #f59e0b;">$0.00 CAPTURED</div>
-            <div class="next-action-note" style="color: #fef08a;">Execution paused. Waiting for human approval.</div>
-          </div>
-        `;
-      }
-
-      // Action button
-      let selectButtonHtml = "";
-      if (run.status === "AWAITING_SELECTION" || cand.status === "PROPOSED") {
-        selectButtonHtml = `
-          <div style="margin-top: 14px;">
-            <button type="button" class="btn-primary btn-select-cand" data-cand-id="${escapeHtml(cand.id)}" style="width: 100%; justify-content: center;">
-              👉 Select Candidate for Purchase ➔
-            </button>
-          </div>
-        `;
-      }
-
-      // Hidden content warnings
-      let hiddenContentHtml = "";
-      if (cand.hiddenContent && cand.hiddenContent.length > 0) {
-        hiddenContentHtml = `
-          <div style="margin-top: 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; border-radius: var(--radius-sm); padding: 8px; font-size: 12px;">
-            <strong style="color: #ef4444;">⚠️ Off-Screen Text Discovered:</strong>
-            <div style="margin-top: 4px; font-family: var(--font-mono); color: #fca5a5;">${escapeHtml(cand.hiddenContent.join("\n"))}</div>
-          </div>
-        `;
-      }
-
-      card.innerHTML = `
-        <div class="candidate-card-header">
-          <span class="candidate-number">#${idx + 1} — ${escapeHtml(cand.merchantDisplayName)}</span>
-          <span class="brand-badge ${cand.status === 'ALLOWED' ? 'green' : cand.status === 'BLOCKED' ? 'red' : ''}">${escapeHtml(cand.status)}</span>
-        </div>
-        <div class="candidate-card-body">
-          <h4 style="font-size: 15px; font-weight: 700; margin-bottom: 8px;">${escapeHtml(cand.productName)} (SKU: ${escapeHtml(cand.sku)})</h4>
-
-          <div class="price-comparison-box">
-            <div>
-              <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Advertised Price</div>
-              <div class="price-box-val" style="color: #94a3b8;">${formatCents(cand.advertisedTotalCents)}</div>
-            </div>
-            <div class="price-arrow">➔</div>
-            <div>
-              <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Signed Quote Total</div>
-              <div class="price-box-val" style="color: ${cand.status === 'BLOCKED' ? '#ef4444' : '#10b981'};">
-                ${formatCents(cand.quoteTotalCents)}
-              </div>
-            </div>
-          </div>
-
-          <div style="font-size: 12px; color: var(--text-secondary); margin: 8px 0;">
-            <div>Seller: <strong>${escapeHtml(cand.seller.name)}</strong> (${cand.seller.verified ? '✓ Verified' : '⚠️ Unverified'})</div>
-            <div>Returns: <strong>${escapeHtml(cand.terms.returnPolicy)}</strong> ${cand.terms.finalSale ? '<span style="color: #ef4444;">(Final Sale)</span>' : ''}</div>
-            <div>Subscription: <strong>${cand.terms.subscription ? '<span style="color: #ef4444;">YES</span>' : '<span style="color: #10b981;">None</span>'}</strong> | Gift Card: <strong>${cand.terms.giftCardIncluded ? '<span style="color: #ef4444;">YES</span>' : '<span style="color: #10b981;">None</span>'}</strong></div>
-          </div>
-
-          ${hiddenContentHtml}
-          ${verdictBannerHtml}
-          ${selectButtonHtml}
-        </div>
-      `;
-
-      const selectBtn = card.querySelector(".btn-select-cand");
-      if (selectBtn) {
-        selectBtn.addEventListener("click", () => {
-          selectCandidate(cand.id);
-        });
-      }
-
-      candidatesContainer.appendChild(card);
-    });
-  }
-
-  function updateBudgetMeter(quotedCents, maxCents) {
-    budgetMeterText.textContent = `${formatCents(quotedCents)} / ${formatCents(maxCents)}`;
-    const pct = maxCents > 0 ? (quotedCents / maxCents) * 100 : 0;
-    const clampedWidth = Math.min(pct, 100);
-
-    budgetMeterFill.style.width = `${clampedWidth}%`;
-    if (pct > 100) {
-      budgetMeterFill.className = "meter-fill red";
-      budgetMeterText.innerHTML = `${formatCents(quotedCents)} / ${formatCents(maxCents)} <strong style="color: #ef4444;">(${Math.round(pct)}% OVER)</strong>`;
-    } else {
-      budgetMeterFill.className = "meter-fill green";
-    }
-  }
-
-  function updateContractSummary(contract) {
-    if (!contract) return;
-    contractBadgeHash.textContent = contract.hash ? `${contract.hash.slice(0, 10)}...` : "SIGNED";
-    summaryMaxPrice.textContent = formatCents(contract.budget_max_cents ?? 7000);
-    summaryMaxQty.textContent = "1 item";
-    summarySubscriptions.textContent = "PROHIBITED";
-    summaryGiftcards.textContent = "PROHIBITED";
-    summaryUnverified.textContent = "PAUSE (STEP_UP)";
-    summaryExpiry.textContent = "15 mins";
-  }
-
-  function updateEvidencePane(receiptId, cand, amountCents) {
-    if (evReceiptId) evReceiptId.textContent = receiptId;
-    if (evPaymentId) evPaymentId.textContent = `pay_${receiptId}`;
-    if (evContractId) evContractId.textContent = state.currentRun?.signedIntentId || "contract_intent";
-    if (evMerchantId) evMerchantId.textContent = cand?.merchantId || "novamart";
-    if (evVerdict) evVerdict.textContent = "ALLOW";
-    if (evMoneyMoved) evMoneyMoved.textContent = `${formatCents(amountCents)} (${amountCents}¢)`;
-  }
-
-  // --- Attack Lab Submission ---
-  if (attackForm) {
-    attackForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const attack = {
-        storeId: attackStore.value,
-        productSku: attackProduct.value,
-        placement: attackPlacement.value,
-        instruction: attackInstruction.value.trim(),
-      };
-
-      if (!attack.instruction) {
-        alert("Please enter a malicious instruction.");
-        return;
-      }
-
-      btnPlantAttack.disabled = true;
-      btnPlantAttack.textContent = "Planting Attack...";
-      try {
-        const result = await apiPost("/api/attack/plant", attack);
-        state.activeAttack = attack;
-        alert(`✓ ${result.message}\n\nStarting agent discovery now.`);
-        await startAgentDiscovery(`Find ${attackProduct.options[attackProduct.selectedIndex].text} under $70`);
-      } catch (err) {
-        alert("Planting attack failed: " + err.message);
-      } finally {
-        btnPlantAttack.disabled = false;
-        btnPlantAttack.textContent = "⚡ Plant Attack & Run Agent";
-      }
-    });
-  }
-
-  // Preset Attack Payloads
-  document.querySelectorAll("#attack-form .preset-chip-btn").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      const att = chip.getAttribute("data-attack");
-      if (att && attackInstruction) attackInstruction.value = att;
-    });
-  });
-
-  // --- Evidence Verification ---
-  if (btnVerifyCrypto) {
-    btnVerifyCrypto.addEventListener("click", async () => {
-      btnVerifyCrypto.disabled = true;
-      btnVerifyCrypto.textContent = "Verifying Signatures...";
-      try {
-        const result = await apiPost("/api/evidence/verify", { receiptId: state.lastReceiptId });
-        if (result.valid) {
-          cryptoStatusBadge.innerHTML = `
-            <span class="crypto-valid-badge">
-              ✓ VALID CRYPTOGRAPHIC PROOF: Hash Chain &amp; Ed25519 Signatures Intact
-            </span>
-          `;
-          evSigStatus.textContent = "VERIFIED (Valid Ed25519 signature)";
-          evSigStatus.style.color = "#10b981";
-          evChainStatus.textContent = "VERIFIED (Merkle Hash Chain intact)";
-          evChainStatus.style.color = "#10b981";
-        } else {
-          cryptoStatusBadge.innerHTML = `
-            <span class="crypto-invalid-badge">
-              ✗ INVALID: Evidence verification failed (${escapeHtml(result.failures?.join(", "))})
-            </span>
-          `;
-          evSigStatus.textContent = "FAILED";
-          evSigStatus.style.color = "#ef4444";
-        }
-      } catch (err) {
-        alert("Verification request failed: " + err.message);
-      } finally {
-        btnVerifyCrypto.disabled = false;
-        btnVerifyCrypto.textContent = "🛡️ Verify Cryptographic Chain";
-      }
-    });
-  }
-
-  if (btnViewEvidenceFromRun) {
-    btnViewEvidenceFromRun.addEventListener("click", () => {
-      switchView("evidence");
-    });
-  }
-
-  // --- Quick Demo Walkthroughs (Under 90 Seconds) ---
-  const demoBlockBtn = document.getElementById("quick-demo-block");
-  if (demoBlockBtn) {
-    demoBlockBtn.addEventListener("click", async () => {
-      promptInput.value = "Cheapest wireless headphones max $70 all-in, no subscriptions or gift cards";
-      await startAgentDiscovery(promptInput.value);
-    });
-  }
-
-  const demoStepupBtn = document.getElementById("quick-demo-stepup");
-  if (demoStepupBtn) {
-    demoStepupBtn.addEventListener("click", async () => {
-      promptInput.value = "Find headphones on PeerMarket, max $70";
-      await startAgentDiscovery(promptInput.value);
-    });
-  }
-
-  const demoAttackBtn = document.getElementById("quick-demo-attack");
-  if (demoAttackBtn) {
-    demoAttackBtn.addEventListener("click", () => {
-      switchView("attack");
-    });
-  }
-
-  const demoEvidenceBtn = document.getElementById("quick-demo-evidence");
-  if (demoEvidenceBtn) {
-    demoEvidenceBtn.addEventListener("click", () => {
-      switchView("evidence");
-    });
-  }
-
-  // --- Initial Setup ---
-  refreshStatus();
-  setInterval(refreshStatus, 10000);
 })();
