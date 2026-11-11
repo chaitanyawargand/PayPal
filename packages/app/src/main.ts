@@ -7,7 +7,7 @@ async function main(): Promise<void> {
     throw new Error("Refusing to start: RUN_PAYPAL_LIVE=1 is not allowed for the Phase 7 app");
   }
 
-  const port = Number(process.env.PORT ?? "8787");
+  const port = Number(process.env.APP_PORT ?? (process.env.PORT && process.env.PORT !== "5000" ? process.env.PORT : "8787"));
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`Invalid PORT: ${process.env.PORT}`);
   }

@@ -100,6 +100,5 @@ npx tsc -p packages/app/tsconfig.json --noEmit
 npx vitest run packages/app
 
 # Start the standalone Control Center server on port 8787
-npx tsx packages/app/src/index.ts
+npm run app
 ```
-
