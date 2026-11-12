@@ -1,119 +1,173 @@
-# Recourse
+# Recourse — Shop everything. Trust nothing.
 
-Recourse is a pre-payment firewall for agent-initiated payments. Before money
-moves, it checks a payment against a signed Intent Contract:
+**A pre-payment firewall for AI shopping agents.**
 
-- A valid payment may be captured.
-- A tampered payment is blocked and moves $0.
-- Every outcome writes a signed, hash-chained receipt.
-- Receipts can be verified independently against the signing public key.
+## The problem
 
-The deterministic engine makes the final payment decision. AI may only
-tighten a decision toward step-up or block; it can never loosen a
-deterministic block.
+AI shopping agents read merchant listings, descriptions, reviews, and other
+content that merchants control. That content can try to manipulate an agent into
+ignoring a user's budget or buying something else. An agent being manipulated
+must never be enough to move money.
 
-## Judge demo: run it end to end (Phase 7 Control Center)
+## What Recourse does
 
-The browser demo uses MockPsp only. It requires no PayPal credentials and
-moves no real money.
+The user reviews and signs a shopping mission before the autonomous agent acts.
+The signed mission binds the requested item, quantity, condition, allowed
+merchants, exclusions, and a hard all-in budget cap. The agent can discover and
+rank offers, but it cannot move money.
 
-### Step 1: Start the three store servers
+Merchants issue signed quotes. Before payment, the Recourse gateway verifies the
+quote signature and its merchant, SKU, quantity, and total against the signed
+mission and server-computed pricing. A deterministic payment decision runs
+separately from any LLM. Gemini integrations, when enabled, are advisory: the
+tightening judge can request more review or block, but cannot loosen a
+deterministic outcome or authorize payment. A human can approve only a
+`STEP_UP`. The gateway captures at most once and never above the signed cap.
+Completed payments produce Evidence that can be verified independently.
 
-In three separate terminals from the repository root:
+## Payment outcomes
+
+- **ALLOW** — all deterministic checks pass; the gateway may capture the
+  verified amount.
+- **STEP_UP** — the gateway pauses with $0 captured until a human approves or
+  rejects. Approval uses the already verified decision and quote; rejection
+  excludes that candidate.
+- **BLOCK** — the candidate is ineligible. The autonomous flow may exclude it
+  and retry through a fresh gateway run.
+- **TAMPER_REJECT** — signature or signed payment data failed verification. The
+  run aborts immediately with $0 captured.
+- **NEEDS_CLARIFICATION** — required mission details, such as a confirmed hard
+  cap, are missing. No mission is signed until the user answers.
+
+Planted listing content is untrusted merchant data. It can tighten a decision
+to `STEP_UP`, but it is never an instruction to AgentBrain, the signed mission,
+the quote, or the payment path.
+
+## Demo flows proven in the browser
+
+- **Normal NovaMart headphones purchase:** `COMPLETED`, 6,774 cents captured
+  once, Evidence `VALID`.
+- **Planted content attack, approved:** mission
+  `mission_6538f7fa-f725-4aea-ba1f-e352474f2131` paused at `STEP_UP` with $0
+  captured; approval captured 6,774 cents exactly once; Evidence `VALID`.
+- **Planted content attack, rejected:** mission
+  `mission_b44e74ed-2830-44ec-a4a5-67ffc09cb615` paused at `STEP_UP` with $0
+  captured; rejection excluded the candidate and ended `NO_PURCHASE` with
+  $0.00 captured.
+- The prior happy-path and clarification/no-purchase browser gates passed.
+
+The NovaMart planted Product Description text was not visible in Sidd's last
+manual storefront check. The attack did reach discovery and the judge, and the
+reported STEP_UP behavior worked; storefront visibility remains a deferred
+polish issue and is not claimed as browser-verified fixed.
+
+## Architecture
+
+| Component | Repository package | Responsibility |
+| --- | --- | --- |
+| Control Center and mission UI | `packages/app` | HTTP app, dashboard, mission review/signing flow, and Attack Lab |
+| Autonomous discovery and missions | `packages/phase7-agent` | Search, quote requests, candidate building, and signed mission orchestration |
+| Shared run and candidate contracts | `packages/phase7-contracts` | Validated run, candidate, event, and decision data shapes |
+| Merchant storefronts | `packages/stores/novamart`, `packages/stores/dealdemon`, `packages/stores/peermarket` | Independent catalogs, listing APIs, carts, pricing, and signed quotes |
+| Shared storefront primitives | `packages/stores/store-core` | Catalog types, pricing, quote signing, and listing content |
+| Payment policy | `packages/engine` | Deterministic payment decision rules |
+| Quote and contract host adapters | `packages/phase7-host` | HMAC quote verification, signed intent resolution, and deterministic engine bridge |
+| Gateway | `packages/phase7-gateway` | Sole payment execution authority; verifies, decides, pauses, and calls the PSP port |
+| Advisory judge | `packages/phase7-judge` | Tightening-only judge boundary and optional Gemini adapter |
+| Mock payment provider | `packages/psp` | Idempotent in-memory MockPsp; the demo does not move live money |
+| Evidence and receipt chain | `packages/evidence`, `packages/ledger` | Evidence creation/verification and signed, hash-chained receipts |
+| Local persistence | `packages/db` | SQLite-backed intent and ledger data |
+
+Attack Lab registrations are projected into the targeted merchant listing.
+Discovery passes listing text as data to candidate and judge layers; it does not
+turn that content into mission or payment instructions.
+
+## Security model
+
+- The agent, merchant content, LLM output, and Gemini are untrusted.
+- The gateway is the sole money mover. Agent discovery and ranking cannot call
+  the PSP directly.
+- Prices and totals are computed and checked server-side in integer cents.
+- Merchant quotes are HMAC-signed and checked against the selected merchant,
+  SKU, quantity, total, and signed user cap before execution.
+- Capture is idempotent and limited to the verified total within the signed
+  cap. `STEP_UP` approval does not bypass quote verification.
+- `TAMPER_REJECT` aborts immediately with $0. `BLOCK` excludes a candidate;
+  any retry uses a fresh gateway run. Four unsuccessful attempts end in
+  `NO_PURCHASE` with $0 captured.
+- Planted content can trigger a tighter review such as `STEP_UP`; it cannot
+  loosen a decision, change the signed mission or quote, alter totals, or force
+  capture.
+- Completed payment Evidence includes cryptographic material for independent
+  verification. Non-payment and aborted runs remain visible in the run
+  timeline; they do not represent a completed payment receipt.
+
+## How to run
+
+Use four PowerShell terminals from the repository root. The store and app
+scripts load local environment configuration with `dotenv/config`.
+
+In each terminal, keep live PayPal disabled:
 
 ```powershell
-# Terminal 1: NovaMart (Honest Retailer — Port 8801)
-npm run store:novamart
-
-# Terminal 2: DealDemon (Discount/Adversarial Store — Port 8802)
-npm run store:dealdemon
-
-# Terminal 3: PeerMarket (Peer Marketplace — Port 8803)
-npm run store:peermarket
+$env:RUN_PAYPAL_LIVE = "0"
 ```
 
-### Step 2: Start the Recourse Control Center
-
-In a fourth terminal from the repository root:
+Start one store per terminal:
 
 ```powershell
-npm run app
+npm run store:novamart   # default port 8801
+npm run store:dealdemon  # default port 8802
+npm run store:peermarket # default port 8803
 ```
 
-*(Alternatively: `npx tsx packages/app/src/main.ts` or `npm run ui`)*
+Start the Control Center in the fourth terminal:
 
-Leave that running and open your browser to:
-
+```powershell
+$env:RUN_PAYPAL_LIVE = "0"
+npm run app              # default port 8787
 ```
-http://127.0.0.1:8787/
+
+Open `http://127.0.0.1:8787/`. Store ports can be set with `NOVAMART_PORT`,
+`DEALDEMON_PORT`, and `PEERMARKET_PORT`; the app port can be set with
+`APP_PORT` (or `PORT`).
+
+For the app to verify quotes issued by the separate store processes, configure
+each corresponding quote secret under the same name in the app and that store's
+local environment: `NOVAMART_QUOTE_SECRET`, `DEALDEMON_QUOTE_SECRET`, and
+`PEERMARKET_QUOTE_SECRET`. Keep the values private and do not print them. In
+non-production development, a store without its configured secret generates an
+ephemeral key. Gemini is optional; `GEMINI_API_KEY`, `RECOURSE_AGENT_BRAIN`,
+`GEMINI_MODEL`, and `GEMINI_TIMEOUT_MS` are the available configuration names.
+For a no-network deterministic demo, leave Gemini unconfigured or select the
+deterministic AgentBrain. The prototype uses MockPsp only. Do not enable live
+PayPal; `RUN_PAYPAL_LIVE` must remain `0`.
+
+The browser demo is manual. Automated tests use fake secrets and MockPsp; they
+do not call live Gemini, PayPal, or a live PSP.
+
+## Tests and verification
+
+Run from the repository root:
+
+```sh
+npx vitest run --pool=threads --maxWorkers=1
+npx tsc --noEmit -p tsconfig.json
+npx tsc --noEmit -p packages/app/tsconfig.json
+git diff --check
 ```
 
-### Step 3: End-to-end judge evaluation path
+Final verification: **61 test files passed, 432 tests passed, 5 skipped**.
 
-1. **Agent Discovery across stores**:
-   - In the Prompt Composer, type `Cheapest wireless headphones, max $70 all-in` (or click `▶ Demo 1: BLOCK Bait & Recover`).
-   - The shopping agent queries NovaMart, DealDemon, and PeerMarket simultaneously.
-   - Candidates are proposed and ranked in the center panel:
-     - **NovaMart HDP-001** (AuraSound X200 Wireless Noise-Cancelling Headphones)
-     - **DealDemon HDP-001** (Discount bait with adverse terms/drip fees)
-     - **PeerMarket HDP-001** (Open-box, final-sale listing)
+## Known limitations
 
-2. **NovaMart Honest Purchase (ALLOW)**:
-   - Click **👉 Select Candidate for Purchase** on the NovaMart listing.
-   - Click **✍ Sign Contract & Authorize Gateway Execution**.
-   - The server signs the spending contract via host bridge with Ed25519, binds the draft, and submits the verified HMAC quote.
-   - **Verdict**: **ALLOWED**, exact computed total **$67.74 CAPTURED** via MockPsp. A hash-chained receipt is written to the ledger.
-
-3. **PeerMarket Human Review (STEP_UP)**:
-   - Run discovery for `running shoes` or click `▶ Demo 2: STEP_UP Human Review`.
-   - Select the PeerMarket candidate and click **✍ Sign Contract**.
-   - The AI Safety Review (`TighteningJudge`) detects the unverified seller / final-sale condition and tightens to **STEP_UP**.
-   - Execution pauses for human intervention:
-     - Click **✓ Approve & Continue**: MockPsp executes capture (**$50.17 CAPTURED**).
-     - Or click **✗ Reject & Abort**: Run ends with **$0.00 CAPTURED**.
-
-4. **DealDemon Adversarial Defense (BLOCK)**:
-   - Select the DealDemon candidate and sign with strict bounds ($70 max, no subscriptions).
-   - The deterministic engine catches prohibited subscription line items and price ceiling violation.
-   - **Verdict**: **BLOCKED**, **$0.00 CAPTURED** (payment is never called). The agent is notified to try the next candidate.
-
-5. **Cryptographic Proofs**:
-   - Click **Inspect Signed Cryptographic Evidence** or navigate to tab 5.
-   - Click **🛡️ Verify Cryptographic Chain**.
-   - Verifies the RFC 8032 Ed25519 signature and SHA-256 Merkle ledger hash chain. Result: **VALID**.
-
----
-
-## API used by the demo
-
-- `GET /` — Judge-facing Control Center UI
-- `GET /api/status` — Gateway readiness, AI Safety Review status, and store registry
-- `POST /api/status/judge` — Toggle AI Judge connected/unavailable for fail-safe testing
-- `POST /api/phase7/runs` (and `POST /api/discovery/start`) — Start agent discovery
-- `GET /api/phase7/runs/:id` — Get run and candidate snapshot
-- `GET /api/phase7/runs/:id/events?afterSeq=N` — Incremental timeline event polling
-- `POST /api/phase7/runs/:id/select` — Human candidate selection
-- `POST /api/phase7/runs/:id/sign-and-submit` — Server-side Ed25519 contract signing & submission
-- `POST /api/phase7/runs/:id/step-up` — Human STEP_UP APPROVE / REJECT
-- `POST /api/attack/plant` — Attack Lab prompt injection testing
-- `POST /api/evidence/verify` — Cryptographic hash chain verification
-
-## Trust model
-
-- The signed Intent Contract defines merchant, budget, item, and payment constraints.
-- The deterministic engine computes the expected total; the merchant-proposed total is never trusted as the price source.
-- Only an ALLOW outcome may ask the PSP to move money.
-- A BLOCK outcome moves $0 but still creates a signed receipt.
-- Receipts are hash-chained from a genesis prev_hash and signed with Ed25519.
-- The browser and evidence verifier need only the public key, never the private signing key.
-
-## Current demo limits
-
-- This local UI is intentionally MockPsp-only: MOCK/SANDBOX - NO REAL MONEY.
-- The integrated app reports Judge: DISCONNECTED; the live AI Judge path is not required for the deterministic ALLOW/BLOCK/Evidence demonstration.
-- Starting the app with RUN_PAYPAL_LIVE=1 or a non-Mock PSP is refused.
-
-## Tests
-
-    npx vitest run packages/app/test/ui.test.ts packages/app/test/status.test.ts packages/app/test/evidence.test.ts packages/app/test/app.test.ts packages/app/test/restart.test.ts
-    npx tsc -p packages/app/tsconfig.json --noEmit
+- The prototype executes payments through MockPsp, not live PayPal money
+  movement.
+- The planted-content attack is proven to reach discovery and the judge path
+  and to trigger STEP_UP in the reported approve/reject browser flows.
+- Deferred polish issue: planted Product Description text was not visible in
+  Sidd's NovaMart storefront browser view in the last manual check, even though
+  STEP_UP mission behavior passed. Do not treat the storefront visibility issue
+  as browser-verified fixed.
+- `TAMPER_REJECT` is covered by automated tests; it is not presented here as a
+  separate browser demo.
