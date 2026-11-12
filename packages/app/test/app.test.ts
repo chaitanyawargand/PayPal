@@ -80,6 +80,7 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       const js = await res.text();
       expect(js).toContain("escapeHtml");
       expect(js).toContain("apiPost");
+      expect(js).toContain("This run expired when the app restarted.");
     });
 
     it("serves root path / as index.html", async () => {
@@ -132,6 +133,12 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
         body: JSON.stringify({ status: "CONNECTED" }),
       });
     });
+  });
+
+  it("returns a clean 404 when an events poll references a run lost on app restart", async () => {
+    const response = await fetch(`${baseUrl}/api/run/run_1794424083549_3jn1d/events?afterSeq=0`);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Run 'run_1794424083549_3jn1d' not found" });
   });
 
   describe("Real Gateway & Agent Flow (Discovery, Polling, Selection, Signing)", () => {

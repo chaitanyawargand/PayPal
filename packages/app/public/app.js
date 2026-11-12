@@ -793,8 +793,15 @@
           }
         }
       }
-    } catch {
-      // Ignore polling errors
+    } catch (error) {
+      if (/^Run .+ not found$/i.test(error && error.message ? error.message : "")) {
+        stopEventPolling();
+        state.runId = null;
+        const item = document.createElement("div");
+        item.className = "timeline-item";
+        item.textContent = "This run expired when the app restarted. Start a new shopping request to continue.";
+        el.timelineList.appendChild(item);
+      }
     }
   }
 

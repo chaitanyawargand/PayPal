@@ -239,8 +239,15 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
         const runId = decodeURIComponent(eventsMatch[1]!);
         const rawSeq = parsedUrl.searchParams.get("afterSeq");
         const afterSeq = rawSeq !== null ? parseInt(rawSeq, 10) || 0 : 0;
-        const events = adapter.getEvents(runId, afterSeq);
-        return sendJson(res, 200, { events });
+        try {
+          const events = adapter.getEvents(runId, afterSeq);
+          return sendJson(res, 200, { events });
+        } catch (error) {
+          if (typeof error === "object" && error !== null && "code" in error && error.code === "RUN_NOT_FOUND") {
+            return sendJson(res, 404, { error: `Run '${runId}' not found` });
+          }
+          throw error;
+        }
       }
 
       // 7. Get run snapshot
