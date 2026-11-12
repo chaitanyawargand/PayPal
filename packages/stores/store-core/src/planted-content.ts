@@ -2,7 +2,7 @@ import type { ContentBlock, ProductReview } from "./types.js";
 
 export type PlantedListingAttack = { storeId: string; productSku: string; placement: "description" | "reviews" | "specifications"; instruction: string; plantedAt?: string };
 
-export function applyPlantedListingAttack<T extends { sku: string; specifications?: Record<string, string>; reviews?: ProductReview[]; contentBlocks?: ContentBlock[]; hiddenContent?: Array<{ text: string }> }>(detail: T, merchantId: string, attack: PlantedListingAttack | null): T {
+export function applyPlantedListingAttack<T extends { sku: string; longDescription?: string; specifications?: Record<string, string>; reviews?: ProductReview[]; contentBlocks?: ContentBlock[]; hiddenContent?: Array<{ text: string }> }>(detail: T, merchantId: string, attack: PlantedListingAttack | null): T {
   if (!attack || attack.storeId !== merchantId || attack.productSku.toLowerCase() !== detail.sku.toLowerCase()) return detail;
   const text = attack.instruction;
   if (attack.placement === "reviews") {
@@ -11,7 +11,7 @@ export function applyPlantedListingAttack<T extends { sku: string; specification
   }
   const kind = attack.placement === "description" ? "DESCRIPTION" : "SPECIFICATION";
   const placement = attack.placement === "description" ? "product-detail" : "specifications";
-  const contentBlocks = [...(detail.contentBlocks ?? []), { id: `attack-${merchantId}-${detail.sku}`, kind, placement, visibility: attack.placement === "description" ? "HIDDEN" as const : "VISIBLE" as const, text, source: "MERCHANT" as const }];
-  if (attack.placement === "description") return { ...detail, hiddenContent: [...(detail.hiddenContent ?? []), { text }], contentBlocks };
+  const contentBlocks = [...(detail.contentBlocks ?? []), { id: `attack-${merchantId}-${detail.sku}`, kind, placement, visibility: "VISIBLE" as const, text, source: "MERCHANT" as const }];
+  if (attack.placement === "description") return { ...detail, longDescription: `${detail.longDescription ?? ""}\n${text}`, contentBlocks };
   return { ...detail, specifications: { ...(detail.specifications ?? {}), "Merchant note": text }, contentBlocks };
 }
