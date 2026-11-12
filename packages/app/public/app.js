@@ -16,7 +16,7 @@
   }
 
   function formatCents(cents) {
-    if (typeof cents !== "number" || isNaN(cents)) return "$0.00";
+    if (typeof cents !== "number" || !Number.isFinite(cents) || !Number.isInteger(cents) || cents < 0) return "Unavailable";
     return `$${(cents / 100).toFixed(2)}`;
   }
 
@@ -387,7 +387,7 @@
         <div class="candidate-product-title">${escapeHtml(cand.productName)}</div>
 
         <div class="candidate-price-row">
-          <div class="candidate-allin-price">${formatCents(cand.quoteTotalCents || cand.advertisedTotalCents)}</div>
+          <div class="candidate-allin-price">${formatCents(cand.quoteTotalCents ?? cand.advertisedTotalCents)}</div>
           <div class="candidate-unit-price">All-in total with tax &amp; shipping</div>
         </div>
 
@@ -443,7 +443,7 @@
     el.contractProductName.textContent = candidate.productName;
     el.contractMerchantName.textContent = candidate.merchantDisplayName || candidate.merchantId;
     el.contractQuantity.textContent = candidate.quantity || 1;
-    const expectedCents = candidate.quoteTotalCents || candidate.advertisedTotalCents;
+    const expectedCents = candidate.quoteTotalCents ?? candidate.advertisedTotalCents;
     el.contractExpectedTotal.textContent = formatCents(expectedCents);
     el.contractAllowedPayee.textContent = candidate.merchantDisplayName || candidate.merchantId;
 
@@ -570,14 +570,14 @@
         el.decisionBanner.innerHTML = `
           <div class="verdict-headline">
             <span>✓</span>
-            <span>APPROVED — ${formatCents(decision.computedTotalCents || candidate.quoteTotalCents)} captured</span>
+            <span>APPROVED — ${formatCents(decision.computedTotalCents ?? candidate.quoteTotalCents)} captured</span>
           </div>
           <div class="verdict-body">
             Step-up review exception was approved by human. Mock PSP executed the transaction for the exact verified store quote.
           </div>
           <div class="verdict-meta-grid">
             <div><span class="field-label">Merchant</span><br><strong>${escapeHtml(merchantName)}</strong></div>
-            <div><span class="field-label">Captured Amount</span><br><strong style="color:#10b981;">${formatCents(decision.computedTotalCents || candidate.quoteTotalCents)}</strong></div>
+            <div><span class="field-label">Captured Amount</span><br><strong style="color:#10b981;">${formatCents(decision.computedTotalCents ?? candidate.quoteTotalCents)}</strong></div>
             <div><span class="field-label">Receipt ID</span><br><code style="font-size:11px;">${escapeHtml(decision.receiptId || "rcpt_mock_001")}</code></div>
             <div><span class="field-label">Status</span><br><strong>COMPLETED (APPROVED)</strong></div>
           </div>
@@ -604,7 +604,7 @@
           </div>
           <div class="verdict-meta-grid">
             <div><span class="field-label">Merchant</span><br><strong>${escapeHtml(merchantName)}</strong></div>
-            <div><span class="field-label">Pending Total</span><br><strong>${formatCents(decision.computedTotalCents || candidate.quoteTotalCents)}</strong></div>
+            <div><span class="field-label">Pending Total</span><br><strong>${formatCents(decision.computedTotalCents ?? candidate.quoteTotalCents)}</strong></div>
             <div><span class="field-label">Captured So Far</span><br><strong style="color:#f59e0b;">$0.00</strong></div>
             <div><span class="field-label">Status</span><br><strong>STEP_UP_REQUIRED</strong></div>
           </div>
@@ -859,11 +859,11 @@
     el.btnSignSubmit.addEventListener("click", signAndSubmitFlow);
     el.inputCapDollars.addEventListener("input", () => {
       const cand = state.candidates.find((c) => c.id === state.selectedCandidateId);
-      checkCapWarning(cand ? (cand.quoteTotalCents || cand.advertisedTotalCents) : 0);
+      checkCapWarning(cand ? (cand.quoteTotalCents ?? cand.advertisedTotalCents) : 0);
     });
     el.inputBudgetDollars.addEventListener("input", () => {
       const cand = state.candidates.find((c) => c.id === state.selectedCandidateId);
-      checkCapWarning(cand ? (cand.quoteTotalCents || cand.advertisedTotalCents) : 0);
+      checkCapWarning(cand ? (cand.quoteTotalCents ?? cand.advertisedTotalCents) : 0);
     });
 
     // 3. Attack Lab & Demo Controls
