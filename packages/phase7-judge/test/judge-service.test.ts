@@ -53,7 +53,8 @@ describe("TighteningJudge", () => {
     let captured: JudgeFacts | undefined;
     await setup(decision("ALLOW"), { recommendation: "KEEP" }, (facts) => { captured = facts; }).decide({ run, candidate, verifiedQuote: quote });
     expect(Object.keys(captured!)).toEqual(["run", "candidate", "verifiedQuote", "baseDecision"]);
-    expect(Object.keys(captured!.candidate)).toEqual(["candidateId", "merchantId", "sku", "quantity", "advertisedTotalCents", "quoteTotalCents", "terms", "seller"]);
+    expect(Object.keys(captured!.candidate)).toEqual(["candidateId", "merchantId", "sku", "quantity", "advertisedTotalCents", "quoteTotalCents", "terms", "seller", "listingContent"]);
+    expect(captured!.candidate.listingContent).toEqual([]);
     expect(Object.keys(captured!.candidate.terms)).toEqual(["condition", "returnsDays", "finalSale", "subscription", "giftCard", "warrantyLabel"]);
     const serialized = JSON.stringify(captured);
     for (const secret of ["SYSTEM OVERRIDE", "ignore policies", "API_KEY=hidden-secret-value", "seller-secret-value", "secret seller name"]) expect(serialized).not.toContain(secret);

@@ -1,5 +1,6 @@
 import {
-  CANONICAL_PRODUCTS, InMemoryCartStore, buildQuote, calculatePricing, searchCatalog,
+  CANONICAL_PRODUCTS, InMemoryCartStore, buildQuote, calculatePricing, searchCatalog, applyPlantedListingAttack,
+  type PlantedListingAttack,
   type DeliveryMethod, type ItemCondition, type SignedStoreQuote, type StoreCoreErrorCode, type StoreOffer, type VariantSelection,
 } from "../../store-core/src/index.js";
 import { getOfferBySku, PEERMARKET_OFFERS, getPeerRiskFacts } from "./offers.js";
@@ -25,13 +26,15 @@ export function aggregateQuoteFacts(offers:readonly StoreOffer[]){
 export class PeerMarketStorefront {
  private readonly carts=new InMemoryCartStore();
  private readonly issuedQuotes=new Map<string,SignedStoreQuote>();
+ private plantedAttack:PlantedListingAttack|null=null;
  constructor(private readonly quoteSecret:string,readonly quoteSigning:"configured"|"ephemeral-dev"="configured"){}
  search(input:{query?:string;category?:string;brand?:string;feature?:string;maxUnitPriceCents?:number;sort?:"relevance"|"price_asc"|"price_desc"|"rating";condition?:ItemCondition}){
   return searchCatalog({offers:PEERMARKET_OFFERS,query:input.query,category:input.category as never,brand:input.brand,feature:input.feature,maxUnitPriceCents:input.maxUnitPriceCents,sort:input.sort})
     .filter(result=>!input.condition||result.offer.condition===input.condition)
     .map(result=>({...result,estimatedTotalForOneCents:calculatePricing({lines:[{product:result.product,offer:result.offer,quantity:1}],deliveryMethod:"STANDARD",policy:PEERMARKET_PRICING_POLICY}).computedTotalCents,riskFacts:getPeerRiskFacts(result.offer)}));
  }
- productDetail(sku:string){const product=findProduct(sku);if(!product)return null;const offer=getOfferBySku(product.sku)!;const {subscription,giftCard,...publicOffer}=offer;return {...product,offer:publicOffer,advertisedTerms:{condition:offer.condition,returnsDays:offer.returnsDays,finalSale:offer.finalSale,subscription,giftCard,warrantyLabel:offer.warrantyLabel},variants:product.variantOptions,seller:offer.seller,listingNotes:getListingNotesForSku(product.sku),riskFacts:getPeerRiskFacts(offer),shipping:{shipsFrom:offer.shipsFrom,deliveryEstimateLabel:offer.deliveryEstimateLabel},returnsDays:offer.returnsDays,finalSale:offer.finalSale,warrantyLabel:offer.warrantyLabel,reviews:getReviewsForSku(product.sku),contentBlocks:getContentBlocks(product,offer),hiddenContent:[] as []};}
+ productDetail(sku:string){const product=findProduct(sku);if(!product)return null;const offer=getOfferBySku(product.sku)!;const {subscription,giftCard,...publicOffer}=offer;return applyPlantedListingAttack({...product,offer:publicOffer,advertisedTerms:{condition:offer.condition,returnsDays:offer.returnsDays,finalSale:offer.finalSale,subscription,giftCard,warrantyLabel:offer.warrantyLabel},variants:product.variantOptions,seller:offer.seller,listingNotes:getListingNotesForSku(product.sku),riskFacts:getPeerRiskFacts(offer),shipping:{shipsFrom:offer.shipsFrom,deliveryEstimateLabel:offer.deliveryEstimateLabel},returnsDays:offer.returnsDays,finalSale:offer.finalSale,warrantyLabel:offer.warrantyLabel,reviews:getReviewsForSku(product.sku),contentBlocks:getContentBlocks(product,offer),hiddenContent:[] as []},MERCHANT_ID,this.plantedAttack);}
+ plantAttack(attack:PlantedListingAttack){this.plantedAttack=structuredClone(attack);}clearAttack(){this.plantedAttack=null;}
  getCart(cartId?:string){return this.carts.getOrCreateCart(cartId);}
  addCartItem(cartId:string,sku:string,quantity:number,variant?:VariantSelection){const product=findProduct(sku);const offer=product&&getOfferBySku(product.sku);if(!product||!offer)throw new PeerMarketServiceError("PRODUCT_NOT_FOUND",`Product not found: ${sku}`);return this.carts.addItem(cartId,product,offer,quantity,variant);}
  setCartQuantity(cartId:string,lineId:string,quantity:number){return this.carts.setLineQuantity(cartId,lineId,quantity);}

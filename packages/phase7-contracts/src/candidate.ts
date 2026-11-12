@@ -26,6 +26,7 @@ export const CandidateCard = z.object({
     giftCard: z.boolean(),
   }).strict(),
   hiddenContent: z.array(z.string()),
+  listingContent: z.array(z.string()).optional(),
   quoteId: z.string().optional(),
 }).strict();
 export type CandidateCard = z.infer<typeof CandidateCard>;

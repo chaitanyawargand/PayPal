@@ -34,6 +34,10 @@ export const ProductDetailSchema = z.object({
   seller: SellerResponseSchema,
   advertisedTerms: AdvertisedTermsSchema,
   hiddenContent: HiddenContentSchema,
+  reviews: z.array(z.object({ body: z.string() }).passthrough()).optional(),
+  contentBlocks: z.array(z.object({ text: z.string() }).passthrough()).optional(),
+  longDescription: z.string().optional(),
+  specifications: z.record(z.string(), z.unknown()).optional(),
 });
 export const CartMutationResponseSchema = z.object({
   cart: z.object({ id: z.string().min(1) }),

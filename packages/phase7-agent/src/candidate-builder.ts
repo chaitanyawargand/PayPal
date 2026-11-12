@@ -37,6 +37,13 @@ export function buildCandidateCard(input: {
     seller: product.seller,
     terms: { ...product.advertisedTerms },
     hiddenContent: product.hiddenContent.map((block) => block.text),
+    listingContent: [
+      ...product.hiddenContent.map((block) => block.text),
+      ...(product.reviews ?? []).map((review) => review.body),
+      ...(product.contentBlocks ?? []).map((block) => block.text),
+      ...(product.longDescription ? [product.longDescription] : []),
+      ...Object.values(product.specifications ?? {}).filter((value): value is string => typeof value === "string"),
+    ],
     quoteId: quote.quoteId,
   });
 }

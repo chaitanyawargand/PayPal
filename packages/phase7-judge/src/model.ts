@@ -30,6 +30,7 @@ export type JudgeFacts = {
       warrantyLabel: CandidateCard["terms"]["warrantyLabel"];
     };
     seller: { verified: CandidateCard["seller"]["verified"] };
+    listingContent: string[];
   };
   verifiedQuote: { merchantId: VerifiedQuote["merchantId"]; sku: VerifiedQuote["sku"]; quoteTotalCents: VerifiedQuote["quoteTotalCents"] };
   baseDecision: { outcome: RunDecision["outcome"]; reasonCodes: RunDecision["reasonCodes"] };

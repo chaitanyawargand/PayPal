@@ -825,8 +825,7 @@
         instruction,
       });
       el.attackStatusMsg.classList.remove("hidden");
-      el.attackStatusMsg.textContent = res.message || "Attack registered successfully!";
-      setTimeout(() => el.attackStatusMsg.classList.add("hidden"), 5000);
+      el.attackStatusMsg.textContent = res.message || `ACTIVE · ${storeId} / ${productSku} · ${placement}`;
     } catch (err) {
       alert(`Attack registration failed: ${err.message}`);
     }

@@ -40,9 +40,9 @@ export interface SpendingContractInput {
 }
 
 export interface PlantedAttack {
-  storeId: string;
+  storeId: "novamart" | "dealdemon" | "peermarket";
   productSku: string;
-  placement: string;
+  placement: "description" | "reviews" | "specifications";
   instruction: string;
   plantedAt?: string;
 }

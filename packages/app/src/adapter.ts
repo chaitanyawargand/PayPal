@@ -288,6 +288,9 @@ export class DataAdapter {
         if (this.judgeStatus === "UNAVAILABLE") {
           throw new Error("AI Safety Review is unavailable");
         }
+        if (facts.candidate.listingContent.some((text) => /ignore\s+(?:all\s+)?(?:previous|prior|system)|override\s+(?:the\s+)?(?:system|mission)|force\s+(?:allow|approval)|bypass\s+(?:the\s+)?(?:gateway|safeguards)|add\s+.{0,30}(?:gift\s*card|item)\s+to\s+(?:the\s+)?cart/i.test(text))) {
+          return { recommendation: "STEP_UP" };
+        }
         // DealDemon listings contain prohibited subscriptions and adverse terms -> BLOCK
         if (facts.candidate.merchantId === "dealdemon" || facts.candidate.terms.subscription || facts.candidate.terms.giftCard) {
           return { recommendation: "BLOCK" };
@@ -690,10 +693,26 @@ export class DataAdapter {
   }
 
   async plantAttack(attack: PlantedAttack): Promise<{ success: boolean; message: string }> {
-    this.plantedAttack = { ...attack, plantedAt: new Date().toISOString() };
+    if (!Object.hasOwn(this.remoteQuoteAccess, attack.storeId) || !attack.productSku?.trim() || !attack.instruction?.trim()) throw new Error("A valid merchant, SKU, placement, and instruction are required.");
+    const registered = { ...attack, productSku: attack.productSku.trim(), instruction: attack.instruction.trim(), plantedAt: new Date().toISOString() };
+    const project = async (target: PlantedAttack, clear = false) => {
+      const merchantId = target.storeId;
+      if (this.remoteQuoteAccess[merchantId]) {
+        const response = await fetch(`${this.merchantBaseUrls[merchantId]}/api/attack/${clear ? "clear" : "plant"}`, clear ? { method: "POST" } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(target) });
+        if (!response.ok) throw new Error("The selected merchant could not register the content attack.");
+      } else {
+        const store = merchantId === "novamart" ? this.novamartStore : merchantId === "dealdemon" ? this.dealdemonStore : this.peermarketStore;
+        if (!clear && !store.productDetail(target.productSku)) throw new Error("The selected merchant product was not found.");
+        if (clear) store.clearAttack(); else store.plantAttack(target as any);
+      }
+    };
+    const previous = this.plantedAttack;
+    if (previous && previous.storeId !== registered.storeId) await project(previous, true);
+    await project(registered);
+    this.plantedAttack = registered;
     return {
       success: true,
-      message: `Attack registered on store '${attack.storeId}' for SKU '${attack.productSku}' in '${attack.placement}'`,
+      message: `ACTIVE · ${registered.storeId} / ${registered.productSku} · ${registered.placement}`,
     };
   }
 
@@ -701,7 +720,14 @@ export class DataAdapter {
     return this.plantedAttack;
   }
 
-  clearPlantedAttack(): void {
+  async clearPlantedAttack(): Promise<void> {
+    if (this.plantedAttack) {
+      const merchantId = this.plantedAttack.storeId;
+      if (this.remoteQuoteAccess[merchantId]) {
+        const response = await fetch(`${this.merchantBaseUrls[merchantId]}/api/attack/clear`, { method: "POST" });
+        if (!response.ok) throw new Error("The selected merchant could not clear the content attack.");
+      } else (merchantId === "novamart" ? this.novamartStore : merchantId === "dealdemon" ? this.dealdemonStore : this.peermarketStore).clearAttack();
+    }
     this.plantedAttack = null;
   }
 

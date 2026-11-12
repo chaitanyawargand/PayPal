@@ -199,6 +199,14 @@ export function createNovaMartServer(config: NovaMartConfig): http.Server {
       if (method === "GET" && path === "/assets/client.js")
         return send(res, 200, CLIENT_JS, "text/javascript; charset=utf-8");
       if (path.startsWith("/api/")) {
+        if (method === "POST" && path === "/api/attack/plant") {
+          const body = await readJson(req);
+          if (body?.storeId !== MERCHANT_ID || typeof body?.productSku !== "string" || typeof body?.instruction !== "string" || !body.instruction.trim() || !["description", "reviews", "specifications"].includes(body?.placement)) return json(res, 400, { error: { code: "INVALID_ATTACK", message: "A valid merchant, SKU, placement, and instruction are required" } });
+          if (!store.productDetail(body.productSku)) return json(res, 404, { error: { code: "PRODUCT_NOT_FOUND", message: "Product not found" } });
+          store.plantAttack({ storeId: MERCHANT_ID, productSku: body.productSku, placement: body.placement, instruction: body.instruction, plantedAt: new Date().toISOString() });
+          return json(res, 200, { success: true });
+        }
+        if (method === "POST" && path === "/api/attack/clear") { store.clearAttack(); return json(res, 200, { success: true }); }
         if (method === "GET" && path === "/api/search") {
           const max = url.searchParams.get("maxPriceCents");
           const results = store.search({

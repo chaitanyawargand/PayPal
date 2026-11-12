@@ -58,6 +58,7 @@ function toJudgeFacts(input: JudgeInput, base: Decision): JudgeFacts {
         warrantyLabel: candidate.terms.warrantyLabel,
       },
       seller: { verified: candidate.seller.verified },
+      listingContent: candidate.listingContent ?? [],
     },
     verifiedQuote: {
       merchantId: input.verifiedQuote.merchantId,

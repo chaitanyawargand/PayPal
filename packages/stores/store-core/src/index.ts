@@ -8,4 +8,5 @@ export * from "./cart.js";
 export * from "./search.js";
 export * from "./content.js";
 export * from "./reviews.js";
+export * from "./planted-content.js";
 export * from "./quote.js";

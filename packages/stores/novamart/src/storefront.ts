@@ -9,6 +9,8 @@ import {
   type SignedStoreQuote,
   type StoreCoreErrorCode,
   type VariantSelection,
+  type PlantedListingAttack,
+  applyPlantedListingAttack,
 } from "../../store-core/src/index.js";
 import { getOfferBySku, NOVAMART_OFFERS } from "./offers.js";
 import { NOVAMART_PRICING_POLICY } from "./pricing-policy.js";
@@ -50,6 +52,7 @@ export type Handoff = {
 export class NovaMartStorefront {
   private readonly carts = new InMemoryCartStore();
   private readonly issuedQuotes = new Map<string, SignedStoreQuote>();
+  private plantedAttack: PlantedListingAttack | null = null;
   constructor(
     private readonly quoteSecret: string,
     readonly quoteSigning: QuoteSigning = "configured",
@@ -85,7 +88,7 @@ export class NovaMartStorefront {
     if (!product) return null;
     const offer = getOfferBySku(product.sku)!;
     const { subscription, giftCard, ...publicOffer } = offer;
-    return {
+    return applyPlantedListingAttack({
       ...product,
       offer: publicOffer,
       advertisedTerms: {
@@ -107,8 +110,10 @@ export class NovaMartStorefront {
       reviews: getReviewsForSku(product.sku),
       contentBlocks: getContentBlocks(product),
       hiddenContent: [] as [],
-    };
+    }, MERCHANT_ID, this.plantedAttack);
   }
+  plantAttack(attack: PlantedListingAttack) { this.plantedAttack = structuredClone(attack); }
+  clearAttack() { this.plantedAttack = null; }
   getCart(cartId?: string) {
     return this.carts.getOrCreateCart(cartId);
   }

@@ -319,7 +319,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       // 8. Attack lab
       if (pathname === "/api/attack/plant" && method === "POST") {
         const body = await parseJsonBody<PlantedAttack>(req);
-        if (!body.storeId || !body.productSku || !body.instruction) {
+        if (!body.storeId || !body.productSku || !body.instruction || !body.placement) {
           return sendJson(res, 400, { error: "storeId, productSku, and instruction are required" });
         }
         const result = await adapter.plantAttack(body);
@@ -329,6 +329,10 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       if (pathname === "/api/attack/planted" && method === "GET") {
         const attack = adapter.getPlantedAttack();
         return sendJson(res, 200, { attack });
+      }
+      if (pathname === "/api/attack/clear" && method === "POST") {
+        await adapter.clearPlantedAttack();
+        return sendJson(res, 200, { success: true, attack: null });
       }
 
       // 9. Evidence verification
