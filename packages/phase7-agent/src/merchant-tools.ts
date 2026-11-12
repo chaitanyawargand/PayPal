@@ -23,9 +23,19 @@ export interface ToolTransport {
   requestQuote(input: RequestQuoteInput): Promise<QuoteToolResult>;
 }
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+export type MerchantBaseUrls = Readonly<Record<MerchantId, string>>;
+const DEFAULT_MERCHANT_BASE_URLS: MerchantBaseUrls = {
+  novamart: MERCHANTS.novamart.baseUrl,
+  dealdemon: MERCHANTS.dealdemon.baseUrl,
+  peermarket: MERCHANTS.peermarket.baseUrl,
+};
 
 export class HttpMerchantToolTransport implements ToolTransport {
-  constructor(private readonly fetcher: FetchLike = globalThis.fetch.bind(globalThis), private readonly timeoutMs = 2500) {}
+  constructor(
+    private readonly fetcher: FetchLike = globalThis.fetch.bind(globalThis),
+    private readonly timeoutMs = 2500,
+    private readonly baseUrls: MerchantBaseUrls = DEFAULT_MERCHANT_BASE_URLS,
+  ) {}
 
   async searchStore(raw: SearchStoreInput): Promise<SearchResult[]> {
     const input = this.parseInput(SearchStoreInput, raw);
@@ -63,7 +73,7 @@ export class HttpMerchantToolTransport implements ToolTransport {
     return { quoteId: quote.quoteId, quoteTotalCents: quote.totalCents, advertisedTotalCents: cartData.pricing.computedTotalCents };
   }
 
-  private base(id: MerchantId): string { return MERCHANTS[id].baseUrl; }
+  private base(id: MerchantId): string { return this.baseUrls[id]; }
   private parseInput<T>(schema: z.ZodType<T>, raw: unknown): T {
     const result = schema.safeParse(raw);
     if (!result.success) {

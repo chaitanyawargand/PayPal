@@ -24,6 +24,7 @@ import type {
   GetProductInput,
   RequestQuoteInput,
   QuoteToolResult,
+  MerchantBaseUrls,
 } from "../../phase7-agent/src/merchant-tools.js";
 import { HttpMerchantToolTransport } from "../../phase7-agent/src/merchant-tools.js";
 import { compileDraftContract } from "../../compiler/src/compiler.js";
@@ -92,14 +93,16 @@ function extractSearchQuery(prompt: string): { query: string; maxBudgetCents?: n
 }
 
 class HybridMerchantToolTransport implements ToolTransport {
-  private httpTransport = new HttpMerchantToolTransport();
+  private httpTransport: HttpMerchantToolTransport;
   private quoteCache = new Map<string, any>();
 
   constructor(
     private novamart: NovaMartStorefront,
     private dealdemon: DealDemonStorefront,
     private peermarket: PeerMarketStorefront,
-  ) {}
+    private remoteQuoteAccess: Readonly<Record<"novamart" | "dealdemon" | "peermarket", boolean>>,
+    private baseUrls: MerchantBaseUrls,
+  ) { this.httpTransport = new HttpMerchantToolTransport(globalThis.fetch.bind(globalThis), 2500, baseUrls); }
 
   private getStore(merchantId: "novamart" | "dealdemon" | "peermarket") {
     if (merchantId === "novamart") return this.novamart;
@@ -108,11 +111,12 @@ class HybridMerchantToolTransport implements ToolTransport {
   }
 
   async searchStore(input: SearchStoreInput) {
-    try {
-      const results = await this.httpTransport.searchStore(input);
-      return results;
-    } catch {
-      // ignore network error and fall back to in-process store
+    if (this.remoteQuoteAccess[input.merchantId]) {
+      try {
+        return await this.httpTransport.searchStore(input);
+      } catch {
+        // Network failures fall back to this process's matching signer/verifier key.
+      }
     }
     const store = this.getStore(input.merchantId);
     let results = store.search({ query: input.query });
@@ -147,42 +151,40 @@ class HybridMerchantToolTransport implements ToolTransport {
   }
 
   async getProduct(input: GetProductInput) {
-    try {
-      return await this.httpTransport.getProduct(input);
-    } catch {
-      const store = this.getStore(input.merchantId);
-      const product = store.productDetail(input.sku);
-      if (!product) throw new Error(`Product ${input.sku} not found`);
-      return product as any;
+    if (this.remoteQuoteAccess[input.merchantId]) {
+      try {
+        return await this.httpTransport.getProduct(input);
+      } catch {
+        // Network failures fall back to this process's matching signer/verifier key.
+      }
     }
+    const store = this.getStore(input.merchantId);
+    const product = store.productDetail(input.sku);
+    if (!product) throw new Error(`Product ${input.sku} not found`);
+    return product as any;
   }
 
   async requestQuote(input: RequestQuoteInput): Promise<QuoteToolResult> {
-    try {
-      const quoteRes = await this.httpTransport.requestQuote(input);
-      const port = input.merchantId === "novamart" ? 8801 : input.merchantId === "dealdemon" ? 8802 : 8803;
+    if (this.remoteQuoteAccess[input.merchantId]) {
       try {
-        const fullRes = await fetch(`http://127.0.0.1:${port}/api/quotes/${encodeURIComponent(quoteRes.quoteId)}`);
-        if (fullRes.ok) {
-          const fullQuote = await fullRes.json();
-          this.quoteCache.set(quoteRes.quoteId, fullQuote);
+        const quoteRes = await this.httpTransport.requestQuote(input);
+        try {
+          const fullRes = await fetch(`${this.baseUrls[input.merchantId]}/api/quotes/${encodeURIComponent(quoteRes.quoteId)}`);
+          if (fullRes.ok) this.quoteCache.set(quoteRes.quoteId, await fullRes.json());
+        } catch {
+          // Keep the summary; getSignedQuote will make one server-side retrieval attempt.
         }
+        return quoteRes;
       } catch {
-        // ignore
+        // Network failures fall back to this process's matching signer/verifier key.
       }
-      return quoteRes;
-    } catch {
-      const store = this.getStore(input.merchantId);
-      const cart = store.getCart();
-      store.addCartItem(cart.id, input.sku, input.quantity, input.variant);
-      const quote = store.createQuote(cart.id, "STANDARD");
-      this.quoteCache.set(quote.quoteId, quote);
-      return {
-        quoteId: quote.quoteId,
-        quoteTotalCents: quote.totalCents,
-        advertisedTotalCents: quote.totalCents,
-      };
     }
+    const store = this.getStore(input.merchantId);
+    const cart = store.getCart();
+    store.addCartItem(cart.id, input.sku, input.quantity, input.variant);
+    const quote = store.createQuote(cart.id, "STANDARD");
+    this.quoteCache.set(quote.quoteId, quote);
+    return { quoteId: quote.quoteId, quoteTotalCents: quote.totalCents, advertisedTotalCents: quote.totalCents };
   }
 
   getCachedQuote(quoteId: string): any | undefined {
@@ -211,6 +213,8 @@ export class DataAdapter {
   private agentService: AgentService;
   private missionService: AutonomousMissionOrchestrator;
   private agentBrain: AgentBrainServiceType;
+  private remoteQuoteAccess: Record<"novamart" | "dealdemon" | "peermarket", boolean>;
+  private merchantBaseUrls: MerchantBaseUrls;
   private missionCandidates = new Map<string, { runId: string; candidate: CandidateCard }>();
   private judgeStatus: "CONNECTED" | "UNAVAILABLE" = "CONNECTED";
   private plantedAttack: PlantedAttack | null = null;
@@ -224,7 +228,7 @@ export class DataAdapter {
     RECOURSE_AGENT_BRAIN: process.env.RECOURSE_AGENT_BRAIN,
     GEMINI_MODEL: process.env.GEMINI_MODEL,
     GEMINI_TIMEOUT_MS: process.env.GEMINI_TIMEOUT_MS,
-  })) {
+  }), options: { merchantBaseUrls?: MerchantBaseUrls } = {}) {
     this.agentBrain = agentBrain;
     this.dbDir = mkdtempSync(join(tmpdir(), "recourse-p7c-"));
     this.db = createRecourseDatabase({ path: join(this.dbDir, "app.sqlite") });
@@ -234,15 +238,28 @@ export class DataAdapter {
     this.userPrivateKeyPem = keys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
     this.userPublicKeyPem = keys.publicKey.export({ type: "spki", format: "pem" }).toString();
 
+    const configuredMerchantSecrets = {
+      novamart: process.env.NOVAMART_QUOTE_SECRET,
+      dealdemon: process.env.DEALDEMON_QUOTE_SECRET,
+      peermarket: process.env.PEERMARKET_QUOTE_SECRET,
+    };
+    this.remoteQuoteAccess = {
+      novamart: Boolean(configuredMerchantSecrets.novamart),
+      dealdemon: Boolean(configuredMerchantSecrets.dealdemon),
+      peermarket: Boolean(configuredMerchantSecrets.peermarket),
+    };
+    this.merchantBaseUrls = options.merchantBaseUrls ?? {
+      novamart: "http://127.0.0.1:8801", dealdemon: "http://127.0.0.1:8802", peermarket: "http://127.0.0.1:8803",
+    };
     this.merchantSecrets = {
-      novamart: process.env.NOVAMART_QUOTE_SECRET ?? "novamart-secret-key-32-bytes-ok!",
-      dealdemon: process.env.DEALDEMON_QUOTE_SECRET ?? "dealdemon-secret-key-32-bytes-ok!",
-      peermarket: process.env.PEERMARKET_QUOTE_SECRET ?? "peermarket-secret-key-32-bytes-ok!",
+      novamart: configuredMerchantSecrets.novamart ?? randomBytes(32).toString("base64url"),
+      dealdemon: configuredMerchantSecrets.dealdemon ?? randomBytes(32).toString("base64url"),
+      peermarket: configuredMerchantSecrets.peermarket ?? randomBytes(32).toString("base64url"),
     };
 
-    this.novamartStore = new NovaMartStorefront(this.merchantSecrets.novamart, "configured");
-    this.dealdemonStore = new DealDemonStorefront(this.merchantSecrets.dealdemon, "configured");
-    this.peermarketStore = new PeerMarketStorefront(this.merchantSecrets.peermarket, "configured");
+    this.novamartStore = new NovaMartStorefront(this.merchantSecrets.novamart, this.remoteQuoteAccess.novamart ? "configured" : "ephemeral-dev");
+    this.dealdemonStore = new DealDemonStorefront(this.merchantSecrets.dealdemon, this.remoteQuoteAccess.dealdemon ? "configured" : "ephemeral-dev");
+    this.peermarketStore = new PeerMarketStorefront(this.merchantSecrets.peermarket, this.remoteQuoteAccess.peermarket ? "configured" : "ephemeral-dev");
 
     this.receiptLedger = new SignedReceiptLedger(this.ledgerKeys);
     this.pspAdapter = new MockPspPaymentAdapter(this.psp);
@@ -347,6 +364,8 @@ export class DataAdapter {
       this.novamartStore,
       this.dealdemonStore,
       this.peermarketStore,
+      this.remoteQuoteAccess,
+      this.merchantBaseUrls,
     );
 
     const agentModel = {
@@ -638,9 +657,9 @@ export class DataAdapter {
     const cached = this.toolTransport.getCachedQuote(quoteId);
     if (cached) return cached;
 
-    const port = merchantId === "novamart" ? 8801 : merchantId === "dealdemon" ? 8802 : 8803;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/quotes/${encodeURIComponent(quoteId)}`);
+      if (!this.remoteQuoteAccess[merchantId as keyof typeof this.remoteQuoteAccess]) throw new Error("Remote quote access is not configured.");
+      const res = await fetch(`${this.merchantBaseUrls[merchantId as keyof typeof this.merchantBaseUrls]}/api/quotes/${encodeURIComponent(quoteId)}`);
       if (res.ok) return await res.json();
     } catch {
       // ignore network error and fall back to in-process store

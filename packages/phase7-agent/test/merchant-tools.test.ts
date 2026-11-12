@@ -30,8 +30,12 @@ describe("fixed merchant transport", () => {
     expect((await transport.searchStore({ merchantId: "novamart", query: "jacket" })).length).toBe(1);
     expect((await transport.getProduct({ merchantId: "novamart", sku: "JKT-001" })).advertisedTerms).toEqual(terms);
     expect(await transport.requestQuote({ merchantId: "novamart", sku: "JKT-001", quantity: 1 })).toEqual({ quoteId: "q_1", quoteTotalCents: 1234, advertisedTotalCents: 1234 });
-    expect(calls.map((call) => new URL(call.url).host)).toEqual(["127.0.0.1:8801", "127.0.0.1:8801", "127.0.0.1:8801", "127.0.0.1:8801"]);
-    expect(calls.map((call) => new URL(call.url).pathname)).toEqual(["/api/search", "/api/products/JKT-001", "/api/cart/items", "/api/quote"]);
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8801/api/search?q=jacket",
+      "http://127.0.0.1:8801/api/products/JKT-001",
+      "http://127.0.0.1:8801/api/cart/items",
+      "http://127.0.0.1:8801/api/quote",
+    ]);
     expect(calls.every((call) => call.init?.redirect === "manual")).toBe(true);
   });
 
