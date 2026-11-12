@@ -18,6 +18,6 @@ describe("agent boundary", () => {
     const source = sources.map((entry) => entry.text).join("\n");
     expect(source).not.toMatch(/@paypal|paypal\.com|capturePayment|process\.env|decidePayment|executePayment|verifyQuoteSignature|signQuote/i);
     const networkFiles = sources.filter(({ text }) => /globalThis\.fetch|\.fetch\(/.test(text)).map(({ file }) => file);
-    expect(networkFiles.map((file) => file.split(/[\\/]/).at(-1)).sort()).toEqual(["gemini-model.ts", "merchant-tools.ts"]);
+    expect(networkFiles.map((file) => file.split(/[\\/]/).at(-1)).sort()).toEqual(["agent-brain.ts", "gemini-model.ts", "merchant-tools.ts"]);
   });
 });

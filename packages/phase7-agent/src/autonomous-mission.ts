@@ -3,6 +3,7 @@ import { z } from "zod";
 import { verifyIntentContract } from "../../phase7-host/src/contract-resolver.js";
 import { signContractPayload } from "../../phase7-host/src/contract-resolver.js";
 import type { Contract } from "../../core/src/contract.js";
+import type { IntentBrainDraft } from "./agent-brain.js";
 
 export const MissionSchema = z.object({
   id: z.string().min(1), nonce: z.string().min(1), productQuery: z.string().min(1),
@@ -32,15 +33,17 @@ const INJECTION = /ignore\s+(the\s+)?cap|sign\s+for\s+me|force\s+allow|buy\s+any
 export function draftMission(prompt: string): { draft?: MissionDraft; questions: string[] } {
   const text = prompt.trim();
   const questions: string[] = [];
-  if (!text || /\bbanana\b/i.test(text) || !/headphones?|earbuds?|jacket|shoes?|backpack/i.test(text)) questions.push("What product would you like me to find?");
+  if (!text || /\bbanana\b/i.test(text) || !/headphones?|earbuds?|jacket|shoes?|backpack|zoom|headset|calls?/i.test(text)) questions.push("What product would you like me to find?");
   if (/\b(?:running\s+)?shoes?\b/i.test(text) && !/\b(?:size\s*|US\s+)(?:[0-9]{1,2}(?:\.5)?|[XSML]{1,3})\b/i.test(text)) questions.push("What shoe size should I search for?");
   if (/\bjacket\b/i.test(text) && !/\bsize\s*(?:[XSML]{1,3}|[0-9]{1,2})\b/i.test(text)) questions.push("What jacket size should I search for?");
   const budget = text.match(/(?:max(?:imum)?|under|up to|budget(?: of)?|cap(?: of)?)\s*\$?\s*(\d+(?:\.\d{1,2})?)/i)
+    ?? text.match(/hard\s+all[- ]in\s+cap\s*[:=]?\s*\$?\s*(\d+(?:\.\d{1,2})?)/i)
+    ?? text.match(/confirm(?:ed)?\s+\$?\s*(\d+(?:\.\d{1,2})?)\s+(?:as\s+)?(?:the\s+)?(?:hard\s+)?(?:all[- ]in\s+)?cap/i)
     ?? text.match(/\$\s*(\d+(?:\.\d{1,2})?)\s*(?:all[- ]in|total|max|maximum)/i);
   if (!budget) questions.push("What is your maximum all-in budget, including shipping and fees?");
   if (INJECTION.test(text)) questions.push("Please confirm the product and a hard all-in budget without instructions to bypass safeguards.");
   if (questions.length) return { questions: [...new Set(questions)].slice(0, 3) };
-  const productQuery = /headphones?|earbuds?/i.test(text) ? "headphones" : /jacket/i.test(text) ? "jacket" : /shoes?/i.test(text) ? "shoes" : "backpack";
+  const productQuery = /headphones?|earbuds?|zoom|headset|calls?/i.test(text) ? "headphones" : /jacket/i.test(text) ? "jacket" : /shoes?/i.test(text) ? "shoes" : "backpack";
   const amount = Number(budget![1]);
   if (!Number.isFinite(amount) || amount <= 0 || !Number.isSafeInteger(Math.round(amount * 100))) return { questions: ["What is your maximum all-in budget, including shipping and fees?"] };
   const lower = text.toLowerCase();
@@ -57,7 +60,7 @@ export function draftMission(prompt: string): { draft?: MissionDraft; questions:
       ...(lower.includes("wireless") ? ["wireless"] : []),
       ...(sizeMatch ? [`size:${/shoes?/i.test(text) && /^\d/.test(sizeMatch[1]!) ? `US ${sizeMatch[1]}` : sizeMatch[1]}`] : []),
     ],
-    preferredAttributes: ["cheapest"], exclusions, quantity,
+    preferredAttributes: ["cheapest", ...(/\bdark\s+(?:colour|color)\b/i.test(text) ? ["dark"] : [])], exclusions, quantity,
     condition: lower.includes("used") ? "used" : lower.includes("open-box") ? "open-box" : "new",
     maxAllInCapCents: Math.round(amount * 100), terms: exclusions.map((item) => `no ${item}`), maxAttempts: 4,
   } };
@@ -98,10 +101,29 @@ export class AutonomousMissionOrchestrator {
   private missions = new Map<string, { signed: Mission; view: MissionView; tried: Set<string>; pending?: MissionCandidate; pendingRunId?: string }>();
   constructor(private readonly ports: MissionPorts, private readonly privateKeyPem: string) {}
 
-  start(prompt: string): MissionView {
+  start(prompt: string, proposal?: IntentBrainDraft): MissionView {
     const parsed = draftMission(prompt);
-    if (!parsed.draft) return { missionId: "", status: "NEEDS_CLARIFICATION", questions: parsed.questions, events: [`Prompt received: ${prompt}`], attempts: 0, capturedCents: 0 };
-    const mission = signMission(parsed.draft, this.privateKeyPem, this.ports.now());
+    const approximateCap = approximateCapCents(prompt);
+    const questions = [
+      ...parsed.questions.filter((question) => !(approximateCap !== null && /maximum all-in budget/i.test(question))),
+      ...(approximateCap === null ? [] : [`Please confirm $${(approximateCap / 100).toFixed(2)} as the HARD all-in cap, including shipping and fees.`]),
+      ...(proposal?.clarifyingQuestions ?? []).filter((question) => !(hasExplicitHardCap(prompt) && /cap|budget/i.test(question))),
+    ];
+    if (proposal?.quantity !== null && proposal?.quantity !== undefined && !/\b\d+\s+(?:(?:pairs?|sets?)\s+of\s+)?(?:wireless\s+)?(?:headphones?|earbuds?|jackets?|shoes?|backpacks?|items?|units?|pairs?|sets?)\b/i.test(prompt) && proposal.quantity !== 1) {
+      questions.push("How many should I search for? Please confirm the quantity.");
+    }
+    if (!parsed.draft || questions.length > 0) return { missionId: "", status: "NEEDS_CLARIFICATION", questions: [...new Set(questions)].slice(0, 3), events: [`Prompt received: ${prompt}`], attempts: 0, capturedCents: 0 };
+    const promptLower = prompt.toLowerCase();
+    const modelPreferences = (proposal?.preferredAttributes ?? []).filter((attribute) => promptLower.includes(attribute.toLowerCase()));
+    const modelRequirements = (proposal?.requiredAttributes ?? []).filter((attribute) => promptLower.includes(attribute.toLowerCase()));
+    const modelExclusions = (proposal?.exclusions ?? []).filter((exclusion) => promptLower.includes(exclusion.toLowerCase()));
+    const draft: MissionDraft = {
+      ...parsed.draft,
+      requiredAttributes: [...new Set([...parsed.draft.requiredAttributes, ...modelRequirements])],
+      preferredAttributes: [...new Set([...parsed.draft.preferredAttributes, ...modelPreferences])],
+      exclusions: [...new Set([...parsed.draft.exclusions, ...modelExclusions])],
+    };
+    const mission = signMission(draft, this.privateKeyPem, this.ports.now());
     const view: MissionView = { missionId: mission.id, status: "READY_TO_SIGN", questions: [], events: [`Prompt received: ${prompt}`, `Mission ${mission.id} signed once with a $${(mission.maxAllInCapCents / 100).toFixed(2)} cap.`], attempts: 0, capturedCents: 0 };
     this.missions.set(mission.id, { signed: mission, view, tried: new Set() });
     return structuredClone(view);
@@ -211,5 +233,20 @@ export class AutonomousMissionOrchestrator {
   private valid(state: { signed: Mission }, supplied: Mission): boolean { return JSON.stringify(supplied) === JSON.stringify(state.signed) && verifyMission(supplied, this.ports.publicKeyPem, this.ports.now()); }
   private state(id: string) { const state = this.missions.get(id); if (!state) throw new Error("Mission not found."); return state; }
   private abort(state: { view: MissionView }, message: string): MissionView { state.view.status = "ABORTED"; state.view.securityAlert = message; state.view.events.push(`Mission aborted. Security alert: ${message} $0 captured.`); return structuredClone(state.view); }
+}
+
+function approximateCapCents(prompt: string): number | null {
+  const match = prompt.match(/(?:around|about|approximately|approx\.?|~)\s*\$?\s*(\d+(?:\.\d{1,2})?)/i)
+    ?? prompt.match(/\b(?:around|about)\s+(fifty|sixty|seventy|eighty|ninety|one hundred)\s+(?:bucks|dollars)\b/i);
+  if (!match) return null;
+  const amount = Number(match[1]) || ({ fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90, "one hundred": 100 } as Record<string, number>)[match[1]!.toLowerCase()];
+  if (!Number.isFinite(amount) || amount! <= 0) return null;
+  const hard = prompt.match(/(?:max(?:imum)?|under|up to|budget(?: of)?|hard\s+all[- ]in\s+cap|cap(?: of)?|confirm(?:ed)?)\s*[:=]?\s*\$?\s*(\d+(?:\.\d{1,2})?)/i);
+  if (hard && Math.round(Number(hard[1]) * 100) === Math.round(amount! * 100)) return null;
+  return Math.round(amount! * 100);
+}
+function hasExplicitHardCap(prompt: string): boolean {
+  return /(?:max(?:imum)?|under|up to|budget(?: of)?|hard\s+all[- ]in\s+cap|cap(?: of)?|confirm(?:ed)?)\s*[:=]?\s*\$?\s*\d+(?:\.\d{1,2})?/i.test(prompt)
+    || /\$\s*\d+(?:\.\d{1,2})?\s*(?:all[- ]in|total|max|maximum)/i.test(prompt);
 }
 

@@ -5,6 +5,8 @@ import * as nodePath from "node:path";
 import type { AddressInfo } from "node:net";
 
 import { createAppServer, type AppServerInstance } from "../src/server.js";
+import { DataAdapter } from "../src/adapter.js";
+import { AgentBrainService } from "../../phase7-agent/src/agent-brain.js";
 import { createApp, type RecourseApp } from "../src/index.js";
 import type { PlantedAttack } from "../src/types.js";
 
@@ -14,7 +16,8 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
 
   beforeAll(async () => {
     // Start on ephemeral port 0
-    app = await createAppServer({ port: 0 });
+    const brain = new AgentBrainService({ RECOURSE_AGENT_BRAIN: "deterministic", GEMINI_API_KEY: "fake-test-key-never-used" }, async () => { throw new Error("unexpected fetch"); });
+    app = await createAppServer({ port: 0, adapter: new DataAdapter(brain) });
     baseUrl = `http://127.0.0.1:${app.port}`;
   });
 
@@ -54,6 +57,11 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       const stats = await statsRes.json();
       expect(stats.captureCount).toBe(0);
       expect(stats.capturedCents).toBe(0);
+    });
+
+    it("exposes only honest agent brain provider status", async () => {
+      const res = await fetch(`${baseUrl}/api/agent-brain/status`);
+      expect(await res.json()).toEqual({ provider: "deterministic", configured: true });
     });
 
     it("serves styles.css with correct MIME type", async () => {

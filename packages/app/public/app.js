@@ -838,6 +838,18 @@
   }
 
   let activeMissionId = null;
+  async function refreshAgentBrainStatus() {
+    const label = document.getElementById("agent-brain-status");
+    try {
+      const response = await fetch("/api/agent-brain/status", { headers: { "accept": "application/json" } });
+      if (!response.ok) throw new Error("status unavailable");
+      const status = await response.json();
+      label.textContent = status.provider === "gemini" && status.configured === true
+        ? "Gemini connected for intent drafting; purchase decisions remain deterministic."
+        : "Using deterministic intent fallback.";
+    } catch { label.textContent = "Using deterministic intent fallback."; }
+  }
+
   function renderMission(view) {
     const panel = document.getElementById("mission-result");
     const status = document.getElementById("mission-status");
@@ -874,6 +886,7 @@
     try {
       const view = await apiPost("/api/mission/start", { prompt });
       renderMission(view);
+      await refreshAgentBrainStatus();
     } catch (err) {
       document.getElementById("mission-status").textContent = "Mission could not start";
       document.getElementById("mission-clarifications").textContent = err.message || "Request failed.";
@@ -947,6 +960,7 @@
 
     // Initial system status check & interval
     refreshSystemStatus();
+    refreshAgentBrainStatus();
     setInterval(refreshSystemStatus, 3000);
   }
 

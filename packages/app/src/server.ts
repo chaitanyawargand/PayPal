@@ -122,6 +122,10 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
         return sendJson(res, 200, adapter.getPspStats());
       }
 
+      if (pathname === "/api/agent-brain/status" && method === "GET") {
+        return sendJson(res, 200, adapter.getAgentBrainStatus());
+      }
+
       if (pathname === "/api/status/judge" && method === "POST") {
         const body = await parseJsonBody<{ status: "CONNECTED" | "UNAVAILABLE" }>(req);
         if (body.status === "CONNECTED" || body.status === "UNAVAILABLE") {

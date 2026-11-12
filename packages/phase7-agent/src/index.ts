@@ -1,4 +1,5 @@
 export * from "./agent-service.js";
+export * from "./agent-brain.js";
 export * from "./autonomous-mission.js";
 export * from "./candidate-builder.js";
 export * from "./config.js";

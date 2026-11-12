@@ -45,6 +45,7 @@ import type { CandidateCard } from "../../phase7-contracts/src/candidate.js";
 import type { Event } from "../../phase7-contracts/src/event.js";
 import { AutonomousMissionOrchestrator, type Mission, type MissionCandidate, type MissionView } from "../../phase7-agent/src/autonomous-mission.js";
 import type { Contract } from "../../core/src/contract.js";
+import { AgentBrainService, type AgentBrainService as AgentBrainServiceType, type IntentBrainStatus } from "../../phase7-agent/src/agent-brain.js";
 
 function extractSearchQuery(prompt: string): { query: string; maxBudgetCents?: number } {
   const budgetMatch = prompt.match(/\$?([0-9]+(?:\.[0-9]{2})?)/);
@@ -209,6 +210,7 @@ export class DataAdapter {
   private gateway: GatewayService;
   private agentService: AgentService;
   private missionService: AutonomousMissionOrchestrator;
+  private agentBrain: AgentBrainServiceType;
   private missionCandidates = new Map<string, { runId: string; candidate: CandidateCard }>();
   private judgeStatus: "CONNECTED" | "UNAVAILABLE" = "CONNECTED";
   private plantedAttack: PlantedAttack | null = null;
@@ -217,7 +219,13 @@ export class DataAdapter {
   private receiptLedger: SignedReceiptLedger;
   private evidencePacks = new Map<string, any>();
 
-  constructor() {
+  constructor(agentBrain: AgentBrainServiceType = new AgentBrainService({
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    RECOURSE_AGENT_BRAIN: process.env.RECOURSE_AGENT_BRAIN,
+    GEMINI_MODEL: process.env.GEMINI_MODEL,
+    GEMINI_TIMEOUT_MS: process.env.GEMINI_TIMEOUT_MS,
+  })) {
+    this.agentBrain = agentBrain;
     this.dbDir = mkdtempSync(join(tmpdir(), "recourse-p7c-"));
     this.db = createRecourseDatabase({ path: join(this.dbDir, "app.sqlite") });
 
@@ -503,12 +511,15 @@ export class DataAdapter {
   }
 
   async startMission(prompt: string): Promise<MissionView> {
-    const initial = this.missionService.start(prompt);
+    const intent = await this.agentBrain.draft(prompt);
+    const initial = this.missionService.start(prompt, intent.draft);
     if (initial.status !== "READY_TO_SIGN") return initial;
     const mission = this.missionService.getSignedMission(initial.missionId)!;
     await this.db.intents.saveIntent(mission.contract as Contract);
     return this.missionService.begin(initial.missionId, mission);
   }
+
+  getAgentBrainStatus(): IntentBrainStatus { return this.agentBrain.getStatus(); }
 
   async decideMissionStepUp(missionId: string, decision: "APPROVE" | "REJECT"): Promise<MissionView> {
     const mission = this.missionService.getSignedMission(missionId);
