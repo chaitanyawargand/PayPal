@@ -845,6 +845,7 @@
   }
 
   let activeMissionId = null;
+  let activeDraft = null;
   async function refreshAgentBrainStatus() {
     const label = document.getElementById("agent-brain-status");
     try {
@@ -868,6 +869,11 @@
     timeline.replaceChildren(...(view.events || []).map((message) => {
       const item = document.createElement("li"); item.textContent = message; return item;
     }));
+    if (view.signedFields) {
+      const item = document.createElement("li");
+      item.textContent = `Signed mission: ${view.signedFields.quantity} × ${view.signedFields.productQuery}; condition ${view.signedFields.condition}; hard cap $${(view.signedFields.maxAllInCapCents / 100).toFixed(2)}.`;
+      timeline.appendChild(item);
+    }
     questions.textContent = (view.questions || []).join(" ");
     stepUp.classList.toggle("hidden", view.status !== "STEP_UP_REQUIRED");
     const evidence = document.getElementById("mission-evidence");
@@ -875,6 +881,100 @@
       ? `Captured $${(view.capturedCents / 100).toFixed(2)}. Evidence ${view.evidenceValid ? "VALID" : "INVALID"}.`
       : view.status === "NO_PURCHASE" || view.status === "ABORTED" ? `Captured $0.00.${view.securityAlert ? ` ${view.securityAlert}` : ""}` : "";
     activeMissionId = view.missionId || activeMissionId;
+    if (activeMissionId) sessionStorage.setItem("recourse-active-mission-id", activeMissionId);
+    status.textContent = `Mission ${view.missionId} · SIGNED · ${view.status.replaceAll("_", " ")} · Attempts ${view.attempts}${view.runId ? ` · Run ${view.runId}` : ""}`;
+    document.getElementById("mission-draft-form")?.classList.add("hidden");
+    el.btnAskAgent.classList.add("hidden");
+  }
+
+  function draftRequestFields(form) {
+    const data = new FormData(form);
+    const list = (name) => String(data.get(name) || "").split(",").map((item) => item.trim()).filter(Boolean);
+    return {
+      productQuery: String(data.get("productQuery") || "").trim(),
+      quantity: Number(data.get("quantity")),
+      condition: String(data.get("condition")),
+      maxAllInCapDollars: String(data.get("maxAllInCapDollars") || ""),
+      requiredAttributes: list("requiredAttributes"),
+      preferredAttributes: list("preferredAttributes"),
+      exclusions: list("exclusions"),
+      confirmHardCap: data.get("confirmHardCap") === "on",
+      revision: activeDraft.revision,
+    };
+  }
+
+  function renderDraft(view) {
+    activeDraft = view;
+    const panel = document.getElementById("mission-result");
+    const status = document.getElementById("mission-status");
+    const timeline = document.getElementById("mission-timeline");
+    const container = document.getElementById("mission-clarifications");
+    panel.classList.remove("hidden");
+    status.textContent = view.status.replaceAll("_", " ");
+    timeline.replaceChildren(...(view.questions || []).map((question) => { const li = document.createElement("li"); li.textContent = question; return li; }));
+    for (const suggestion of view.suggestions || []) { const li = document.createElement("li"); li.textContent = suggestion; timeline.appendChild(li); }
+    container.replaceChildren();
+    const form = document.createElement("form");
+    form.id = "mission-draft-form";
+    const field = (labelText, name, value, type = "text") => {
+      const label = document.createElement("label"); label.textContent = labelText;
+      const input = document.createElement(type === "textarea" ? "textarea" : "input");
+      input.name = name; input.value = String(value ?? ""); input.required = ["productQuery", "quantity", "maxAllInCapDollars"].includes(name);
+      if (type !== "textarea") input.type = type;
+      label.appendChild(input); form.appendChild(label);
+    };
+    const f = view.fields;
+    field("Product or search query", "productQuery", f.productQuery);
+    field("Quantity", "quantity", f.quantity, "number");
+    const conditionLabel = document.createElement("label"); conditionLabel.textContent = "Condition";
+    const condition = document.createElement("select"); condition.name = "condition";
+    for (const value of ["new", "open-box", "used"]) { const option = document.createElement("option"); option.value = value; option.textContent = value; option.selected = f.condition === value; condition.appendChild(option); }
+    conditionLabel.appendChild(condition); form.appendChild(conditionLabel);
+    field("Hard all-in cap (USD)", "maxAllInCapDollars", (f.maxAllInCapCents / 100).toFixed(2), "number");
+    field("Required attributes (comma separated)", "requiredAttributes", f.requiredAttributes.join(", "));
+    field("Preferred attributes (comma separated)", "preferredAttributes", f.preferredAttributes.join(", "));
+    field("Exclusions (comma separated)", "exclusions", f.exclusions.join(", "));
+    if ((view.questions || []).some((q) => /confirm \$.*HARD all-in cap/i.test(q))) {
+      const label = document.createElement("label"); const check = document.createElement("input"); check.type = "checkbox"; check.name = "confirmHardCap";
+      label.append(check, document.createTextNode(" I confirm this amount as my hard all-in cap.")); form.appendChild(label);
+    }
+    const save = document.createElement("button"); save.type = "submit"; save.className = "btn-secondary";
+    save.textContent = view.status === "DRAFT_NEEDS_CLARIFICATION" ? "Continue to review" : "Update reviewed mission"; form.appendChild(save);
+    if (view.status === "DRAFT_READY_FOR_REVIEW") {
+      const sign = document.createElement("button"); sign.type = "button"; sign.className = "btn-primary"; sign.id = "mission-sign-start"; sign.textContent = "Sign Mission & Start";
+      form.appendChild(sign); sign.addEventListener("click", signStartDraft);
+    }
+    const error = document.createElement("p"); error.id = "mission-draft-error"; error.setAttribute("role", "alert"); form.appendChild(error);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      save.disabled = true; error.textContent = "Saving and validating your mission…";
+      try {
+        const fields = draftRequestFields(form);
+        const suffix = view.status === "DRAFT_NEEDS_CLARIFICATION" ? "/answers" : "";
+        const response = await fetch(`/api/missions/drafts/${encodeURIComponent(view.draftId)}${suffix}`, {
+          method: view.status === "DRAFT_NEEDS_CLARIFICATION" ? "POST" : "PATCH",
+          headers: { "content-type": "application/json" }, body: JSON.stringify(fields),
+        });
+        const result = await response.json(); if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        renderDraft(result);
+      } catch (err) { error.textContent = err.message || "Could not save the mission draft."; }
+      finally { save.disabled = false; }
+    });
+    container.appendChild(form);
+    document.getElementById("mission-step-up").classList.add("hidden");
+    document.getElementById("mission-evidence").textContent = "No signed mission or payment has been created yet.";
+  }
+
+  async function signStartDraft(event) {
+    const button = event.currentTarget; const form = button.closest("form"); const error = form.querySelector("[role=alert]");
+    button.disabled = true; button.textContent = "Signing and starting…"; error.textContent = "Starting the reviewed mission…";
+    try {
+      const response = await fetch(`/api/missions/drafts/${encodeURIComponent(activeDraft.draftId)}/sign-start`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(draftRequestFields(form)),
+      });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      renderMission(result);
+    } catch (err) { error.textContent = err.message || "Mission could not start."; button.disabled = false; button.textContent = "Sign Mission & Start"; }
   }
 
   async function startMissionFlow() {
@@ -882,7 +982,7 @@
     const prompt = el.promptInput.value.trim();
     if (!prompt) return;
     state.busy = true;
-    activeMissionId = null;
+    activeMissionId = null; activeDraft = null;
     el.btnAskAgent.disabled = true;
     el.shopStatusText.classList.remove("hidden");
     document.getElementById("mission-clarifications").textContent = "";
@@ -891,8 +991,8 @@
     document.getElementById("mission-step-up").classList.add("hidden");
     document.getElementById("mission-result").classList.remove("hidden");
     try {
-      const view = await apiPost("/api/mission/start", { prompt });
-      renderMission(view);
+      const view = await apiPost("/api/missions/drafts", { prompt });
+      renderDraft(view);
       await refreshAgentBrainStatus();
     } catch (err) {
       document.getElementById("mission-status").textContent = "Mission could not start";
@@ -949,6 +1049,8 @@
     document.getElementById("mission-approve").addEventListener("click", () => decideMission("APPROVE"));
     document.getElementById("mission-reject").addEventListener("click", () => decideMission("REJECT"));
     document.getElementById("mission-abort").addEventListener("click", abortMission);
+    const savedMissionId = sessionStorage.getItem("recourse-active-mission-id");
+    if (savedMissionId) apiGet(`/api/missions/${encodeURIComponent(savedMissionId)}`).then(renderMission).catch(() => sessionStorage.removeItem("recourse-active-mission-id"));
 
     // 2. Section 3 Contract Actions
     el.btnSignSubmit.addEventListener("click", signAndSubmitFlow);

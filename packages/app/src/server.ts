@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DataAdapter } from "./adapter.js";
 import type { SpendingContractInput, PlantedAttack } from "./types.js";
+import type { MissionDraft } from "../../phase7-agent/src/autonomous-mission.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,10 +63,34 @@ function sendJson(res: http.ServerResponse, statusCode: number, data: unknown) {
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   });
   res.end(json);
+}
+
+function missionDraftFields(body: Record<string, unknown>): Partial<MissionDraft> {
+  const allowed = new Set(["productQuery", "quantity", "condition", "requiredAttributes", "preferredAttributes", "exclusions", "maxAllInCapDollars", "confirmHardCap", "revision"]);
+  const unexpected = Object.keys(body).find((key) => !allowed.has(key));
+  if (unexpected) throw new Error(`Unexpected mission field: ${unexpected}`);
+  const fields: Partial<MissionDraft> = {};
+  if ("productQuery" in body) fields.productQuery = body.productQuery as string;
+  if ("quantity" in body) fields.quantity = body.quantity as number;
+  if ("condition" in body) fields.condition = body.condition as MissionDraft["condition"];
+  if ("requiredAttributes" in body) fields.requiredAttributes = body.requiredAttributes as string[];
+  if ("preferredAttributes" in body) fields.preferredAttributes = body.preferredAttributes as string[];
+  if ("exclusions" in body) fields.exclusions = body.exclusions as string[];
+  if ("maxAllInCapDollars" in body) {
+    const dollars = body.maxAllInCapDollars;
+    if (typeof dollars !== "number" && typeof dollars !== "string") throw new Error("Hard all-in cap must be a dollar amount.");
+    const match = String(dollars).trim().match(/^(\d+)(?:\.(\d{1,2}))?$/);
+    const cents = match ? Number(match[1]) * 100 + Number((match[2] ?? "").padEnd(2, "0")) : Number.NaN;
+    if (!match || !Number.isSafeInteger(cents) || cents <= 0) throw new Error("Hard all-in cap must be a positive dollar amount with at most two decimal places.");
+    fields.maxAllInCapCents = cents;
+  } else if ("maxAllInCapCents" in body) {
+    throw new Error("Submit the hard all-in cap as a dollar amount.");
+  }
+  return fields;
 }
 
 function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, pathname: string) {
@@ -100,7 +125,7 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
       });
       res.end();
@@ -140,6 +165,35 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
         const body = await parseJsonBody<{ prompt?: string }>(req);
         if (typeof body.prompt !== "string" || !body.prompt.trim()) return sendJson(res, 400, { error: "prompt is required" });
         return sendJson(res, 200, await adapter.startMission(body.prompt));
+      }
+
+      if (pathname === "/api/missions/drafts" && method === "POST") {
+        const body = await parseJsonBody<{ prompt?: string }>(req);
+        if (typeof body.prompt !== "string" || !body.prompt.trim()) return sendJson(res, 400, { error: "prompt is required" });
+        return sendJson(res, 200, await adapter.prepareMissionDraft(body.prompt));
+      }
+      const draftMatch = pathname.match(/^\/api\/missions\/drafts\/([^/]+)(?:\/(answers|sign-start))?$/);
+      if (draftMatch && method === "POST") {
+        const draftId = decodeURIComponent(draftMatch[1]!);
+        const body = await parseJsonBody<Record<string, unknown>>(req);
+        const fields = missionDraftFields(body);
+        const revision = Number.isSafeInteger(body.revision) ? body.revision as number : -1;
+        if (draftMatch[2] === "answers") return sendJson(res, 200, adapter.answerMissionDraft(draftId, { ...fields, confirmHardCap: body.confirmHardCap === true }, revision));
+        if (draftMatch[2] === "sign-start") return sendJson(res, 200, await adapter.signStartMissionDraft(draftId, fields, revision));
+      }
+      if (draftMatch && method === "PATCH" && !draftMatch[2]) {
+        const draftId = decodeURIComponent(draftMatch[1]!);
+        const body = await parseJsonBody<Record<string, unknown>>(req);
+        return sendJson(res, 200, adapter.editMissionDraft(draftId, missionDraftFields(body), Number.isSafeInteger(body.revision) ? body.revision as number : -1));
+      }
+      const missionStatusMatch = pathname.match(/^\/api\/missions\/([^/]+)$/);
+      if (missionStatusMatch && method === "GET") {
+        const view = adapter.getMissionStatus(decodeURIComponent(missionStatusMatch[1]!));
+        return view ? sendJson(res, 200, view) : sendJson(res, 404, { error: "Mission not found." });
+      }
+      if (missionStatusMatch && method === "PATCH") {
+        adapter.assertMissionNotSigned(decodeURIComponent(missionStatusMatch[1]!));
+        return sendJson(res, 404, { error: "Mission draft not found." });
       }
 
       const missionDecisionMatch = pathname.match(/^\/api\/missions\/([^/]+)\/step-up$/);
@@ -295,8 +349,13 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
       // Otherwise serve static files
       serveStatic(req, res, pathname);
     } catch (err: any) {
-      console.error("Server error handling request:", err);
-      sendJson(res, 500, { error: err?.message || "Internal server error" });
+      const message = typeof err?.message === "string" ? err.message : "Internal server error";
+      const status = /needs clarification|locked|already started/i.test(message) ? 409
+        : /not found/i.test(message) ? 404
+          : /Unexpected mission field|Product\/query|must be a list|Quantity must|Hard all-in cap|Condition must|Submit the hard all-in cap|Invalid JSON body|draft changed/i.test(message) ? 400
+            : 500;
+      if (status >= 500) console.error("Server error handling request:", err);
+      sendJson(res, status, { error: message });
     }
   });
 

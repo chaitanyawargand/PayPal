@@ -43,7 +43,7 @@ import type {
 import type { Run } from "../../phase7-contracts/src/run.js";
 import type { CandidateCard } from "../../phase7-contracts/src/candidate.js";
 import type { Event } from "../../phase7-contracts/src/event.js";
-import { AutonomousMissionOrchestrator, type Mission, type MissionCandidate, type MissionView } from "../../phase7-agent/src/autonomous-mission.js";
+import { AutonomousMissionOrchestrator, type Mission, type MissionCandidate, type MissionDraft, type MissionDraftView, type MissionView } from "../../phase7-agent/src/autonomous-mission.js";
 import type { Contract } from "../../core/src/contract.js";
 import { AgentBrainService, type AgentBrainService as AgentBrainServiceType, type IntentBrainStatus } from "../../phase7-agent/src/agent-brain.js";
 
@@ -517,6 +517,31 @@ export class DataAdapter {
     const mission = this.missionService.getSignedMission(initial.missionId)!;
     await this.db.intents.saveIntent(mission.contract as Contract);
     return this.missionService.begin(initial.missionId, mission);
+  }
+
+  async prepareMissionDraft(prompt: string): Promise<MissionDraftView> {
+    const intent = await this.agentBrain.draft(prompt);
+    return this.missionService.prepareDraft(prompt, intent.draft);
+  }
+
+  answerMissionDraft(draftId: string, fields: Partial<MissionDraft> & { confirmHardCap?: boolean }, revision: number): MissionDraftView {
+    return this.missionService.answerDraft(draftId, fields, revision);
+  }
+
+  editMissionDraft(draftId: string, fields: Partial<MissionDraft>, revision: number): MissionDraftView {
+    return this.missionService.editDraft(draftId, fields, revision);
+  }
+
+  async signStartMissionDraft(draftId: string, fields: Partial<MissionDraft>, revision: number): Promise<MissionView> {
+    const mission = this.missionService.signDraft(draftId, fields, revision);
+    await this.db.intents.saveIntent(mission.contract as Contract);
+    return this.missionService.beginSignedMission(mission.id);
+  }
+
+  getMissionStatus(missionId: string): MissionView | undefined { return this.missionService.getMissionView(missionId); }
+
+  assertMissionNotSigned(missionId: string): void {
+    if (this.missionService.isSignedMission(missionId)) throw new Error("Signed mission fields are locked and cannot be edited.");
   }
 
   getAgentBrainStatus(): IntentBrainStatus { return this.agentBrain.getStatus(); }

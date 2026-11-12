@@ -21,7 +21,8 @@ export type MissionCandidate = {
   terms?: { finalSale: boolean; subscription: boolean; giftCard: boolean; returnsDays: number; sellerVerified: boolean };
 };
 export type MissionSubmitResult = { outcome: MissionOutcome; runId: string; captureDelta: number; capturedCents: number; evidenceValid?: boolean; alert?: string };
-export type MissionView = { missionId: string; status: "NEEDS_CLARIFICATION" | "READY_TO_SIGN" | "SEARCHING" | "STEP_UP_REQUIRED" | "COMPLETED" | "NO_PURCHASE" | "ABORTED"; questions: string[]; events: string[]; attempts: number; capturedCents: number; runId?: string; evidenceValid?: boolean; securityAlert?: string };
+export type MissionView = { missionId: string; status: "NEEDS_CLARIFICATION" | "READY_TO_SIGN" | "SEARCHING" | "STEP_UP_REQUIRED" | "COMPLETED" | "NO_PURCHASE" | "ABORTED"; questions: string[]; events: string[]; attempts: number; capturedCents: number; runId?: string; evidenceValid?: boolean; securityAlert?: string; signedFields?: MissionDraft };
+export type MissionDraftView = { draftId: string; revision: number; status: "DRAFT_NEEDS_CLARIFICATION" | "DRAFT_READY_FOR_REVIEW"; prompt: string; fields: MissionDraft; questions: string[]; suggestions: string[] };
 export type MissionPorts = {
   publicKeyPem: string; now(): Date; discover(mission: Mission, excluded: ReadonlySet<string>): Promise<MissionCandidate[]>;
   refresh(mission: Mission, candidate: MissionCandidate): Promise<MissionCandidate>;
@@ -99,7 +100,125 @@ function verifyMission(mission: Mission, publicKeyPem: string, now: Date): boole
 
 export class AutonomousMissionOrchestrator {
   private missions = new Map<string, { signed: Mission; view: MissionView; tried: Set<string>; pending?: MissionCandidate; pendingRunId?: string }>();
+  private drafts = new Map<string, { prompt: string; fields: MissionDraft; view: MissionDraftView; hardCapConfirmed: boolean; signedMissionId?: string }>();
   constructor(private readonly ports: MissionPorts, private readonly privateKeyPem: string) {}
+
+  prepareDraft(prompt: string, proposal?: IntentBrainDraft): MissionDraftView {
+    const parsed = draftMission(prompt);
+    const approximate = approximateCapCents(prompt);
+    const base = parsed.draft;
+    const lowerPrompt = prompt.toLowerCase();
+    const promptedQuantity = Number(prompt.match(/\b(\d+)\s+(?:(?:pairs?|sets?)\s+of\s+)?(?:wireless\s+)?(?:headphones?|earbuds?|jackets?|shoes?|backpacks?|items?|units?|pairs?|sets?)\b/i)?.[1] ?? 1);
+    const promptedProduct = base?.productQuery
+      ?? (/headphones?|earbuds?|zoom|headset|long\s+(?:video\s+)?calls?/i.test(prompt) ? "headphones"
+        : /jacket/i.test(prompt) ? "jacket" : /shoes?/i.test(prompt) ? "shoes"
+          : /backpacks?/i.test(prompt) ? "backpack" : "");
+    const fields: MissionDraft = {
+      productQuery: promptedProduct,
+      requiredAttributes: [...new Set([...(base?.requiredAttributes ?? []), ...(proposal?.requiredAttributes ?? []).filter((item) => lowerPrompt.includes(item.toLowerCase()))])],
+      preferredAttributes: [...new Set([...(base?.preferredAttributes ?? []), ...(proposal?.preferredAttributes ?? []).filter((item) => lowerPrompt.includes(item.toLowerCase()))])],
+      exclusions: [...new Set([...(base?.exclusions ?? []), ...(proposal?.exclusions ?? []).filter((item) => lowerPrompt.includes(item.toLowerCase()))])],
+      quantity: base?.quantity ?? promptedQuantity,
+      condition: base?.condition ?? (/\bused\b/i.test(prompt) ? "used" : /open[ -]box/i.test(prompt) ? "open-box" : /\bnew\b/i.test(prompt) ? "new" : proposal?.condition ?? "new"),
+      maxAllInCapCents: base?.maxAllInCapCents ?? approximate ?? proposal?.suggestedMaxCapCents ?? 0,
+      terms: base?.terms ?? [], maxAttempts: 4,
+    };
+    const questions = this.draftQuestions(prompt, fields, approximate !== null);
+    if (proposal?.quantity && proposal.quantity > 1 && promptedQuantity === 1 && !/\b1\s+(?:headphones?|earbuds?|items?|units?|pairs?|sets?)\b/i.test(prompt)) {
+      questions.push(`Confirm or edit the suggested quantity of ${proposal.quantity}.`);
+    }
+    const draftId = `draft_${randomUUID()}`;
+    const view: MissionDraftView = {
+      draftId, revision: 0, status: questions.length ? "DRAFT_NEEDS_CLARIFICATION" : "DRAFT_READY_FOR_REVIEW",
+      prompt, fields, questions,
+      suggestions: ["Suggested values are editable and are not binding until you continue to review.", ...(proposal?.productQuery && proposal.productQuery !== fields.productQuery ? [`Agent suggestion: product/query “${proposal.productQuery}”.`] : [])],
+    };
+    this.drafts.set(draftId, { prompt, fields, view, hardCapConfirmed: approximate === null && !!base?.maxAllInCapCents });
+    return structuredClone(view);
+  }
+
+  answerDraft(id: string, input: Partial<MissionDraft> & { confirmHardCap?: boolean }, revision: number): MissionDraftView {
+    const state = this.draftState(id);
+    this.assertDraftRevision(state, revision);
+    if (state.signedMissionId) throw new Error("Signed mission fields are locked and this draft cannot be reused.");
+    if (state.view.status !== "DRAFT_NEEDS_CLARIFICATION" && state.view.status !== "DRAFT_READY_FOR_REVIEW") throw new Error("Mission draft is no longer editable.");
+    state.fields = this.mergeDraftFields(state.fields, input);
+    state.hardCapConfirmed = input.confirmHardCap === true;
+    return this.refreshDraft(state);
+  }
+
+  editDraft(id: string, input: Partial<MissionDraft>, revision: number): MissionDraftView {
+    const state = this.draftState(id);
+    this.assertDraftRevision(state, revision);
+    if (state.signedMissionId) throw new Error("Signed mission fields are locked and this draft cannot be reused.");
+    if (state.view.status !== "DRAFT_READY_FOR_REVIEW") throw new Error("Answer required clarification before editing the review.");
+    state.fields = this.mergeDraftFields(state.fields, input);
+    state.hardCapConfirmed = true;
+    return this.refreshDraft(state);
+  }
+
+  signDraft(id: string, input: Partial<MissionDraft>, revision: number): Mission {
+    const state = this.draftState(id);
+    if (state.signedMissionId) throw new Error("Signed mission fields are locked and this draft cannot be reused.");
+    if (state.view.status !== "DRAFT_READY_FOR_REVIEW") throw new Error("Mission needs clarification and cannot be signed.");
+    this.assertDraftRevision(state, revision);
+    state.fields = this.mergeDraftFields(state.fields, input);
+    const questions = this.draftQuestions(state.prompt, state.fields, false, state.hardCapConfirmed);
+    if (questions.length) {
+      state.view.status = "DRAFT_NEEDS_CLARIFICATION";
+      state.view.questions = questions;
+      throw new Error(`Mission needs clarification: ${questions.join(" ")}`);
+    }
+    const mission = signMission(state.fields, this.privateKeyPem, this.ports.now());
+    const view: MissionView = { missionId: mission.id, status: "READY_TO_SIGN", questions: [], events: [`Mission ${mission.id} signed with the reviewed $${(mission.maxAllInCapCents / 100).toFixed(2)} hard cap.`], attempts: 0, capturedCents: 0, signedFields: structuredClone(state.fields) };
+    this.missions.set(mission.id, { signed: mission, view, tried: new Set() });
+    state.signedMissionId = mission.id;
+    state.view.status = "DRAFT_READY_FOR_REVIEW";
+    return structuredClone(mission);
+  }
+
+  async beginSignedMission(id: string): Promise<MissionView> { const mission = this.getSignedMission(id); if (!mission) throw new Error("Mission not found."); return this.begin(id, mission); }
+
+  getMissionView(id: string): MissionView | undefined { const state = this.missions.get(id); return state ? structuredClone(state.view) : undefined; }
+  isSignedMission(id: string): boolean { return this.missions.has(id); }
+
+  private draftQuestions(prompt: string, fields: MissionDraft, approximate: boolean, hardCapConfirmed = false): string[] {
+    const questions: string[] = [];
+    if (!fields.productQuery.trim() || /^(products|product)$/i.test(fields.productQuery.trim())) questions.push("What product would you like me to find?");
+    if (!Number.isSafeInteger(fields.maxAllInCapCents) || fields.maxAllInCapCents <= 0) questions.push("What is your maximum all-in budget, including shipping and fees?");
+    else if ((approximate || !hardCapConfirmed) && !hasExplicitHardCap(prompt)) questions.push(`Confirm $${(fields.maxAllInCapCents / 100).toFixed(2)} as the HARD all-in cap, or enter another amount.`);
+    if (!Number.isSafeInteger(fields.quantity) || fields.quantity < 1 || fields.quantity > 100) questions.push("How many should I search for?");
+    if (!fields.condition) questions.push("Which condition should I search for: new, open-box, or used?");
+    if (/\b(?:running\s+)?shoes?\b/i.test(prompt) && !fields.requiredAttributes.some((attribute) => /^size:/i.test(attribute))) questions.push("What shoe size should I search for?");
+    if (/\bjacket\b/i.test(prompt) && !fields.requiredAttributes.some((attribute) => /^size:/i.test(attribute))) questions.push("What jacket size should I search for?");
+    return [...new Set(questions)];
+  }
+
+  private mergeDraftFields(current: MissionDraft, input: Partial<MissionDraft> & { confirmHardCap?: boolean }): MissionDraft {
+    const keys = ["productQuery", "requiredAttributes", "preferredAttributes", "exclusions", "quantity", "condition", "maxAllInCapCents"];
+    if (Object.keys(input).some((key) => !keys.includes(key) && key !== "confirmHardCap")) throw new Error("Unexpected mission field.");
+    const { confirmHardCap: _confirmHardCap, ...bindingFields } = input;
+    const merged = { ...current, ...bindingFields } as MissionDraft;
+    if (typeof merged.productQuery !== "string" || merged.productQuery.trim().length < 2 || merged.productQuery.length > 200) throw new Error("Product/query must be between 2 and 200 characters.");
+    for (const key of ["requiredAttributes", "preferredAttributes", "exclusions"] as const) {
+      if (!Array.isArray(merged[key]) || merged[key].some((value) => typeof value !== "string" || value.length > 100)) throw new Error(`${key} must be a list of text values.`);
+      merged[key] = merged[key].map((value) => value.trim()).filter(Boolean);
+    }
+    if (!Number.isSafeInteger(merged.quantity) || merged.quantity < 1 || merged.quantity > 100) throw new Error("Quantity must be a whole number from 1 to 100.");
+    if (!Number.isSafeInteger(merged.maxAllInCapCents) || merged.maxAllInCapCents <= 0) throw new Error("Hard all-in cap must be a positive whole number of cents.");
+    if (!["new", "open-box", "used"].includes(merged.condition)) throw new Error("Condition must be new, open-box, or used.");
+    return merged;
+  }
+
+  private refreshDraft(state: { prompt: string; fields: MissionDraft; view: MissionDraftView; hardCapConfirmed: boolean; signedMissionId?: string }): MissionDraftView {
+    const questions = this.draftQuestions(state.prompt, state.fields, false, state.hardCapConfirmed);
+    state.view = { ...state.view, revision: state.view.revision + 1, fields: structuredClone(state.fields), questions, status: questions.length ? "DRAFT_NEEDS_CLARIFICATION" : "DRAFT_READY_FOR_REVIEW" };
+    return structuredClone(state.view);
+  }
+  private assertDraftRevision(state: { view: MissionDraftView }, revision: number): void {
+    if (!Number.isSafeInteger(revision) || revision !== state.view.revision) throw new Error("Mission draft changed; reload the latest review before continuing.");
+  }
+  private draftState(id: string) { const state = this.drafts.get(id); if (!state) throw new Error("Mission draft not found."); return state; }
 
   start(prompt: string, proposal?: IntentBrainDraft): MissionView {
     const parsed = draftMission(prompt);

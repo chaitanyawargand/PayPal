@@ -35,7 +35,7 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       const html = await res.text();
       expect(html).toContain("Recourse — Pre-Payment Firewall");
       expect(html).toContain("Autonomous AI Shopping Agent Guardrail");
-      expect(html).toContain("Sign Mission &amp; Start Shopping");
+      expect(html).toContain("Review Shopping Mission");
       expect(html).toContain('id="mission-timeline"');
       expect(html).toContain('id="mission-approve"');
       expect(html).toContain('<details class="secondary-panel" id="details-attack-lab">');
@@ -55,6 +55,108 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       }
       const statsRes = await fetch(`${baseUrl}/api/psp/stats`);
       const stats = await statsRes.json();
+      expect(stats.captureCount).toBe(0);
+      expect(stats.capturedCents).toBe(0);
+    });
+
+    it("keeps messy intent clarification-only and rejects server sign/start before confirmation", async () => {
+      const store = (app.adapter.getGateway().store as any);
+      const runsBefore = store.runs.size;
+      const start = await fetch(`${baseUrl}/api/missions/drafts`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "something comfy for long Zoom calls, dark colour, around fifty bucks, used is fine" }),
+      });
+      const draft = await start.json();
+      expect(draft.status).toBe("DRAFT_NEEDS_CLARIFICATION");
+      expect(draft.questions.join(" ")).toMatch(/confirm \$50\.00 as the HARD all-in cap/i);
+      expect(draft.fields.maxAllInCapCents).toBe(5000);
+
+      const forbidden = await fetch(`${baseUrl}/api/missions/drafts/${draft.draftId}/sign-start`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      expect(forbidden.status).toBe(409);
+      expect((await forbidden.json()).error).toMatch(/needs clarification/i);
+      const tamperAttempt = await fetch(`${baseUrl}/api/missions/drafts/${draft.draftId}/sign-start`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ merchantId: "novamart", outcome: "ALLOW", computedTotalCents: 1, signature: "forged", capture: true }),
+      });
+      expect(tamperAttempt.status).toBe(400);
+      expect(store.runs.size).toBe(runsBefore);
+      expect((await (await fetch(`${baseUrl}/api/psp/stats`)).json()).captureCount).toBe(0);
+    });
+
+    it("moves answered draft to review, rebuilds edits, signs the exact 6000-cent cap, and retrieves the same mission", async () => {
+      const start = await fetch(`${baseUrl}/api/missions/drafts`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "something comfy for long Zoom calls, dark colour, around fifty bucks, used is fine" }),
+      });
+      const draft = await start.json();
+      const answers = {
+        productQuery: "headphones", quantity: 1, condition: "used", maxAllInCapDollars: "60.00",
+        requiredAttributes: ["wireless"], preferredAttributes: ["dark"], exclusions: [], confirmHardCap: true, revision: draft.revision,
+      };
+      const reviewResponse = await fetch(`${baseUrl}/api/missions/drafts/${draft.draftId}/answers`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(answers),
+      });
+      const review = await reviewResponse.json();
+      expect(review.status).toBe("DRAFT_READY_FOR_REVIEW");
+      expect(review.fields.maxAllInCapCents).toBe(6000);
+      const staleEdit = await fetch(`${baseUrl}/api/missions/drafts/${draft.draftId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...answers, revision: draft.revision }),
+      });
+      expect(staleEdit.status).toBe(400);
+      const editedResponse = await fetch(`${baseUrl}/api/missions/drafts/${draft.draftId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...answers, maxAllInCapDollars: "60.00", revision: review.revision }),
+      });
+      const edited = await editedResponse.json();
+      expect(edited.status).toBe("DRAFT_READY_FOR_REVIEW");
+      expect(edited.fields.maxAllInCapCents).toBe(6000);
+
+      const signedResponse = await fetch(`${baseUrl}/api/missions/drafts/${draft.draftId}/sign-start`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...answers, revision: edited.revision }),
+      });
+      expect(signedResponse.status).toBe(200);
+      const signed = await signedResponse.json();
+      expect(signed.missionId).toMatch(/^mission_/);
+      const contract = (app.adapter as any).missionService.getSignedMission(signed.missionId);
+      expect(contract.maxAllInCapCents).toBe(6000);
+      expect(contract.contract.budget_max_cents).toBe(6000);
+      const statusResponse = await fetch(`${baseUrl}/api/missions/${signed.missionId}`);
+      const status = await statusResponse.json();
+      expect(status.missionId).toBe(signed.missionId);
+      expect(status.status).toBe(signed.status);
+      expect(status.events).toEqual(signed.events);
+      const tamperResponse = await fetch(`${baseUrl}/api/missions/${signed.missionId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ maxAllInCapDollars: "90" }) });
+      expect(tamperResponse.status).toBe(409);
+      const replayResponse = await fetch(`${baseUrl}/api/missions/drafts/${draft.draftId}/sign-start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...answers, revision: edited.revision }) });
+      expect(replayResponse.status).toBe(409);
+      const editSignedDraft = await fetch(`${baseUrl}/api/missions/drafts/${draft.draftId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...answers, revision: edited.revision }) });
+      expect(editSignedDraft.status).toBe(409);
+    });
+
+    it("allows a fully explicit prompt into editable review without signing it", async () => {
+      const response = await fetch(`${baseUrl}/api/missions/drafts`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "Buy new wireless headphones, max $70 all-in" }),
+      });
+      const draft = await response.json();
+      expect(draft.status).toBe("DRAFT_READY_FOR_REVIEW");
+      expect(draft.fields.maxAllInCapCents).toBe(7000);
+      expect(draft.draftId).toBeTruthy();
+    });
+
+    it("keeps banana and a wireless-headphone prompt without a budget in clarification state", async () => {
+      const store = (app.adapter.getGateway().store as any);
+      const runsBefore = store.runs.size;
+      for (const [prompt, expected] of [["banana", /product/i], ["Buy wireless headphones.", /budget|cap/i], ["Running shoes max $80", /shoe size/i]] as const) {
+        const response = await fetch(`${baseUrl}/api/missions/drafts`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }),
+        });
+        const draft = await response.json();
+        expect(draft.status).toBe("DRAFT_NEEDS_CLARIFICATION");
+        expect(draft.questions.join(" ")).toMatch(expected);
+      }
+      expect(store.runs.size).toBe(runsBefore);
+      const stats = await (await fetch(`${baseUrl}/api/psp/stats`)).json();
       expect(stats.captureCount).toBe(0);
       expect(stats.capturedCents).toBe(0);
     });
