@@ -30,6 +30,7 @@ export const ProductDetailSchema = z.object({
   slug: z.string().min(1),
   name: z.string().min(1),
   defaultVariant: z.record(z.string(), z.string()),
+  variantOptions: z.array(z.object({ id: z.string(), label: z.string(), values: z.array(z.string().min(1)) }).strict()).optional(),
   seller: SellerResponseSchema,
   advertisedTerms: AdvertisedTermsSchema,
   hiddenContent: HiddenContentSchema,

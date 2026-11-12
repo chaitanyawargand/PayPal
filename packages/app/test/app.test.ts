@@ -32,6 +32,28 @@ describe("Phase 7 Part C — Judge Experience & Control Center Server & UI", () 
       const html = await res.text();
       expect(html).toContain("Recourse — Pre-Payment Firewall");
       expect(html).toContain("Autonomous AI Shopping Agent Guardrail");
+      expect(html).toContain("Sign Mission &amp; Start Shopping");
+      expect(html).toContain('id="mission-timeline"');
+      expect(html).toContain('id="mission-approve"');
+      expect(html).toContain('<details class="secondary-panel" id="details-attack-lab">');
+    });
+
+    it("returns clarification without starting a run, signing a contract, or capturing", async () => {
+      for (const prompt of ["banana", "Buy wireless headphones."]) {
+        const res = await fetch(`${baseUrl}/api/mission/start`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }),
+        });
+        expect(res.status).toBe(200);
+        const mission = await res.json();
+        expect(mission.status).toBe("NEEDS_CLARIFICATION");
+        expect(mission.missionId).toBe("");
+        expect(mission.attempts).toBe(0);
+        expect(mission.capturedCents).toBe(0);
+      }
+      const statsRes = await fetch(`${baseUrl}/api/psp/stats`);
+      const stats = await statsRes.json();
+      expect(stats.captureCount).toBe(0);
+      expect(stats.capturedCents).toBe(0);
     });
 
     it("serves styles.css with correct MIME type", async () => {

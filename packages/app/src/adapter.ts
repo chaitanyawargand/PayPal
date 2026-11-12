@@ -43,6 +43,8 @@ import type {
 import type { Run } from "../../phase7-contracts/src/run.js";
 import type { CandidateCard } from "../../phase7-contracts/src/candidate.js";
 import type { Event } from "../../phase7-contracts/src/event.js";
+import { AutonomousMissionOrchestrator, type Mission, type MissionCandidate, type MissionView } from "../../phase7-agent/src/autonomous-mission.js";
+import type { Contract } from "../../core/src/contract.js";
 
 function extractSearchQuery(prompt: string): { query: string; maxBudgetCents?: number } {
   const budgetMatch = prompt.match(/\$?([0-9]+(?:\.[0-9]{2})?)/);
@@ -206,6 +208,8 @@ export class DataAdapter {
   private toolTransport: HybridMerchantToolTransport;
   private gateway: GatewayService;
   private agentService: AgentService;
+  private missionService: AutonomousMissionOrchestrator;
+  private missionCandidates = new Map<string, { runId: string; candidate: CandidateCard }>();
   private judgeStatus: "CONNECTED" | "UNAVAILABLE" = "CONNECTED";
   private plantedAttack: PlantedAttack | null = null;
 
@@ -356,6 +360,84 @@ export class DataAdapter {
       tools: this.toolTransport,
       model: agentModel,
     });
+
+    this.missionService = new AutonomousMissionOrchestrator({
+      publicKeyPem: this.userPublicKeyPem,
+      now: () => new Date(),
+      discover: async (mission, excluded) => {
+        let snapshot: { run: Run; candidates: CandidateCard[] };
+        const requestedSize = mission.requiredAttributes.find((attribute) => attribute.startsWith("size:"))?.slice(5);
+        try { snapshot = await this.agentService.startDiscovery(mission.productQuery, mission.quantity, requestedSize ? { size: requestedSize } : {}); }
+        catch { return []; }
+        const results: MissionCandidate[] = [];
+        for (const candidate of snapshot.candidates) {
+          const product = await this.toolTransport.getProduct({ merchantId: candidate.merchantId, sku: candidate.sku }).catch(() => undefined);
+          const quote = candidate.quoteId ? await this.getSignedQuote(candidate.merchantId, candidate.quoteId).catch(() => undefined) : undefined;
+          const missionCandidate: MissionCandidate = {
+            id: candidate.id, merchantId: candidate.merchantId, sku: candidate.sku,
+            variant: candidate.variantLabel, quoteId: candidate.quoteId ?? "",
+            allInCents: candidate.quoteTotalCents ?? candidate.advertisedTotalCents,
+            ...(typeof quote?.expiresAt === "string" ? { quoteExpiresAt: quote.expiresAt } : {}),
+            terms: {
+              finalSale: candidate.terms.finalSale, subscription: candidate.terms.subscription,
+              giftCard: candidate.terms.giftCard, returnsDays: candidate.terms.returnsDays,
+              sellerVerified: candidate.seller.verified,
+            },
+            attributes: [
+              ...candidate.productName.toLowerCase().split(/\W+/),
+              ...(product?.features ?? []).flatMap((feature: string) => feature.toLowerCase().split(/\W+/)),
+              ...(candidate.variantLabel ? candidate.variantLabel.split(", ").map((variant) => variant.replace(": ", ":").toLowerCase()) : []),
+              ...(candidate.terms.subscription ? ["subscription"] : []),
+              ...(candidate.terms.giftCard ? ["gift card"] : []),
+            ],
+            condition: candidate.terms.condition === "OPEN_BOX" ? "open-box" : candidate.terms.condition === "NEW" ? "new" : "used",
+          };
+          if ([missionCandidate.id, missionCandidate.quoteId, `${missionCandidate.merchantId}/${missionCandidate.sku}/${missionCandidate.variant ?? "default"}`].some((key) => excluded.has(key))) continue;
+          this.missionCandidates.set(candidate.id, { runId: snapshot.run.id, candidate });
+          results.push(missionCandidate);
+        }
+        return results;
+      },
+      refresh: async (mission, candidate) => {
+        const merchantId = candidate.merchantId as "novamart" | "dealdemon" | "peermarket";
+        const product = await this.toolTransport.getProduct({ merchantId, sku: candidate.sku });
+        const variant = candidate.variant ? Object.fromEntries(candidate.variant.split(", ").map((entry) => { const [key, value] = entry.split(": "); return [key!, value!]; })) : product.defaultVariant;
+        const quoteSummary = await this.toolTransport.requestQuote({ merchantId, sku: candidate.sku, quantity: mission.quantity, variant });
+        const quote = await this.getSignedQuote(merchantId, quoteSummary.quoteId);
+        const ref = this.missionCandidates.get(candidate.id);
+        if (ref) {
+          const updated = this.gateway.store.updateCandidate(ref.runId, { ...ref.candidate, quoteId: quoteSummary.quoteId, quoteTotalCents: quoteSummary.quoteTotalCents, advertisedTotalCents: quoteSummary.advertisedTotalCents });
+          this.missionCandidates.set(candidate.id, { ...ref, candidate: updated });
+        }
+        return { ...candidate, quoteId: quoteSummary.quoteId, allInCents: quoteSummary.quoteTotalCents, quoteExpiresAt: quote.expiresAt };
+      },
+      submit: async (mission, item) => {
+        const ref = this.missionCandidates.get(item.id);
+        if (!ref) return { outcome: "TAMPER_REJECT", runId: "run_missing", captureDelta: 0, capturedCents: 0, alert: "Candidate was not registered by server discovery." };
+        const before = this.psp.captureCount();
+        const beforeCents = this.psp.totalCapturedCents();
+        this.gateway.selectCandidate(ref.runId, ref.candidate.id);
+        this.gateway.createDraft(ref.runId, mission.id);
+        const signedQuote = await this.getSignedQuote(item.merchantId, item.quoteId);
+        const result = await this.gateway.submitSignedQuote(ref.runId, { signedIntentId: mission.id, quoteId: item.quoteId, signedQuote });
+        const delta = this.psp.captureCount() - before;
+        const capturedCents = this.psp.totalCapturedCents() - beforeCents;
+        const decision = result.run.decision;
+        const evidence = decision?.receiptId ? await this.verifyEvidence(decision.receiptId) : undefined;
+        const outcome = decision?.outcome ?? "BLOCK";
+        if (outcome === "TAMPER_REJECT") return { outcome, runId: ref.runId, captureDelta: delta, capturedCents, alert: "Quote signature validation failed." };
+        return { outcome, runId: ref.runId, captureDelta: delta, capturedCents, ...(evidence ? { evidenceValid: evidence.valid } : {}) };
+      },
+      stepUp: async (_mission, item, runId, decision) => {
+        const before = this.psp.captureCount();
+        const beforeCents = this.psp.totalCapturedCents();
+        const result = await this.gateway.decideStepUp(runId, decision);
+        const delta = this.psp.captureCount() - before;
+        const capturedCents = this.psp.totalCapturedCents() - beforeCents;
+        const evidence = result.run.decision?.receiptId ? await this.verifyEvidence(result.run.decision.receiptId) : undefined;
+        return { outcome: decision === "REJECT" ? "BLOCK" : "ALLOW", runId, captureDelta: delta, capturedCents, ...(evidence ? { evidenceValid: evidence.valid } : {}) };
+      },
+    }, this.userPrivateKeyPem);
   }
 
   getGateway(): GatewayService {
@@ -419,6 +501,22 @@ export class DataAdapter {
   async startDiscovery(prompt: string): Promise<{ run: Run; candidates: CandidateCard[] }> {
     return this.agentService.startDiscovery(prompt);
   }
+
+  async startMission(prompt: string): Promise<MissionView> {
+    const initial = this.missionService.start(prompt);
+    if (initial.status !== "READY_TO_SIGN") return initial;
+    const mission = this.missionService.getSignedMission(initial.missionId)!;
+    await this.db.intents.saveIntent(mission.contract as Contract);
+    return this.missionService.begin(initial.missionId, mission);
+  }
+
+  async decideMissionStepUp(missionId: string, decision: "APPROVE" | "REJECT"): Promise<MissionView> {
+    const mission = this.missionService.getSignedMission(missionId);
+    if (!mission) throw new Error("Mission not found.");
+    return this.missionService.decideStepUp(missionId, mission, decision);
+  }
+
+  abortMission(missionId: string): MissionView { return this.missionService.abortPausedMission(missionId); }
 
   selectCandidate(runId: string, candidateId: string): { run: Run; candidates: CandidateCard[] } {
     return this.gateway.selectCandidate(runId, candidateId);

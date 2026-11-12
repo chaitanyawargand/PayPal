@@ -21,10 +21,11 @@ export type AgentServiceDependencies = { gateway: AgentGatewayPort; tools: ToolT
 export class AgentService {
   constructor(private readonly deps: AgentServiceDependencies) {}
 
-  async startDiscovery(prompt: string): Promise<AgentGatewaySnapshot> {
+  async startDiscovery(prompt: string, quantityOverride?: number, variantOverride: Record<string, string> = {}): Promise<AgentGatewaySnapshot> {
     const created = Run.parse(await this.deps.gateway.createRun(prompt));
     await this.deps.gateway.beginSearch(created.id);
-    const plan = await this.plan(prompt);
+    const draftedPlan = await this.plan(prompt);
+    const plan = SearchPlanSchema.parse({ ...draftedPlan, ...(quantityOverride === undefined ? {} : { quantity: quantityOverride }) });
     const searched = await Promise.all(MERCHANT_IDS.map(async (merchantId) => {
       try {
         const results = await this.deps.tools.searchStore({ merchantId, query: plan.query });
@@ -43,13 +44,19 @@ export class AgentService {
         const result = parsed.data;
         try {
           const product = await this.deps.tools.getProduct({ merchantId: store.merchantId, sku: result.sku });
+          const variant = { ...product.defaultVariant };
+          for (const [requestedKey, requestedValue] of Object.entries(variantOverride)) {
+            const option = product.variantOptions?.find((item) => item.id === requestedKey || item.label.toLowerCase() === requestedKey.toLowerCase());
+            if (!option || !option.values.includes(requestedValue)) throw new Error("Requested variant unavailable");
+            variant[option.id] = requestedValue;
+          }
           const quote = await this.deps.tools.requestQuote({
             merchantId: store.merchantId,
             sku: result.sku,
             quantity: plan.quantity,
-            variant: product.defaultVariant,
+            variant,
           });
-          candidates.push(buildCandidateCard({ runId: created.id, merchantId: store.merchantId, sku: result.sku, quantity: plan.quantity, product, quote }));
+          candidates.push(buildCandidateCard({ runId: created.id, merchantId: store.merchantId, sku: result.sku, quantity: plan.quantity, product, quote, variant }));
         } catch {
           // A malformed or unavailable listing is excluded; other listings and merchants continue.
         }

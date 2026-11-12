@@ -11,6 +11,7 @@ function setup(options: { failSearch?: string; invalidTerms?: string | true; bad
   const created = Run.parse({ id: "run_test", prompt: "jacket", status: "CREATED", createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() });
   let registered: Candidate[] = [];
   let rankingInput: CandidateRankingInput | undefined;
+  const requestedQuantities: number[] = [];
   const gateway: AgentGatewayPort = {
     createRun: () => created,
     beginSearch: () => ({ run: { ...created, status: "SEARCHING" as const }, candidates: [] }),
@@ -23,13 +24,13 @@ function setup(options: { failSearch?: string; invalidTerms?: string | true; bad
       if (options.invalidTerms === true || options.invalidTerms === merchantId) (value as { advertisedTerms?: unknown }).advertisedTerms = undefined;
       return value as never;
     },
-    requestQuote: async () => ({ quoteId: "quote", quoteTotalCents: 1000, advertisedTotalCents: 1000 }),
+    requestQuote: async ({ quantity }) => { requestedQuantities.push(quantity); return { quoteId: "quote", quoteTotalCents: 1000, advertisedTotalCents: 1000 }; },
   };
   const model: AgentModelPort = {
     planSearch: () => { if (options.failPlan) throw new Error("offline"); return { query: "jacket", quantity: 1, maxBudgetCents: 10 }; },
     rankCandidates: (input) => { rankingInput = input; return { orderedCandidateIds: options.badRanking ? ["unknown"] : input.candidates.map((candidate) => candidate.id).reverse() }; },
   };
-  return { service: new AgentService({ gateway, tools, model }), get registered() { return registered; }, get rankingInput() { return rankingInput; } };
+  return { service: new AgentService({ gateway, tools, model }), get registered() { return registered; }, get rankingInput() { return rankingInput; }, requestedQuantities };
 }
 
 describe("agent discovery service", () => {
@@ -58,5 +59,12 @@ describe("agent discovery service", () => {
     const state = setup({ invalidTerms: true });
     await expect(state.service.startDiscovery("jacket")).rejects.toMatchObject({ code: "NO_CANDIDATES" });
     expect(state.registered).toHaveLength(0);
+  });
+
+  it("uses the signed mission quantity for every merchant quote", async () => {
+    const state = setup();
+    await state.service.startDiscovery("find a jacket", 2);
+    expect(state.requestedQuantities).toEqual([2, 2, 2]);
+    expect(state.registered.every((candidate) => candidate.quantity === 2)).toBe(true);
   });
 });

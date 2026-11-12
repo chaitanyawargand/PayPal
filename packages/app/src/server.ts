@@ -132,6 +132,21 @@ export function createAppServer(options: AppServerOptions = {}): Promise<AppServ
         return sendJson(res, 400, { error: "status must be 'CONNECTED' or 'UNAVAILABLE'" });
       }
 
+      if (pathname === "/api/mission/start" && method === "POST") {
+        const body = await parseJsonBody<{ prompt?: string }>(req);
+        if (typeof body.prompt !== "string" || !body.prompt.trim()) return sendJson(res, 400, { error: "prompt is required" });
+        return sendJson(res, 200, await adapter.startMission(body.prompt));
+      }
+
+      const missionDecisionMatch = pathname.match(/^\/api\/missions\/([^/]+)\/step-up$/);
+      if (missionDecisionMatch && method === "POST") {
+        const body = await parseJsonBody<{ decision?: "APPROVE" | "REJECT" }>(req);
+        if (body.decision !== "APPROVE" && body.decision !== "REJECT") return sendJson(res, 400, { error: "decision must be APPROVE or REJECT" });
+        return sendJson(res, 200, await adapter.decideMissionStepUp(decodeURIComponent(missionDecisionMatch[1]!), body.decision));
+      }
+      const missionAbortMatch = pathname.match(/^\/api\/missions\/([^/]+)\/abort$/);
+      if (missionAbortMatch && method === "POST") return sendJson(res, 200, adapter.abortMission(decodeURIComponent(missionAbortMatch[1]!)));
+
       // 2. Real Phase 7 discovery flow
       if ((pathname === "/api/discovery/start" || pathname === "/api/phase7/runs") && method === "POST") {
         const body = await parseJsonBody<{ prompt: string }>(req);

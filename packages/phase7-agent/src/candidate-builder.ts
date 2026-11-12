@@ -11,13 +11,15 @@ export function buildCandidateCard(input: {
   quantity: number;
   product: unknown;
   quote: unknown;
+  variant?: Record<string, string>;
 }): Candidate {
   const productResult = ProductDetailSchema.safeParse(input.product);
   if (!productResult.success) throw new AgentError("STORE_INVALID_RESPONSE", `Store ${input.merchantId} returned incomplete product terms.`);
   const quote = zQuote(input.quote, input.merchantId);
   const product = productResult.data;
   if (product.sku.toLowerCase() !== input.sku.toLowerCase()) throw new AgentError("STORE_INVALID_RESPONSE", `Store ${input.merchantId} returned a different product.`);
-  const variantLabel = Object.entries(product.defaultVariant).map(([key, value]) => `${key}: ${value}`).join(", ");
+  const selectedVariant = input.variant ?? product.defaultVariant;
+  const variantLabel = Object.entries(selectedVariant).map(([key, value]) => `${key}: ${value}`).join(", ");
   return CandidateCard.parse({
     id: `cand_${encodeURIComponent(input.runId)}_${input.merchantId}_${product.sku}`,
     runId: input.runId,

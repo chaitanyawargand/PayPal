@@ -113,10 +113,22 @@
         </div>
 
         <div class="shop-action-row">
-          <button type="button" id="btn-ask-agent" class="btn-primary">Ask Agent to Shop</button>
+          <button type="button" id="btn-ask-agent" class="btn-primary">Sign Mission &amp; Start Shopping</button>
           <span id="shop-status-text" class="status-msg hidden">Searching NovaMart, DealDemon, and PeerMarket…</span>
         </div>
       </div>
+      <section id="mission-result" class="timeline-panel hidden" aria-live="polite">
+        <h3 id="mission-status">Mission</h3>
+        <ol id="mission-timeline"></ol>
+        <div id="mission-clarifications"></div>
+        <div id="mission-step-up" class="hidden">
+          <p>The agent is paused. No money has moved. Review this STEP_UP request.</p>
+          <button type="button" id="mission-approve" class="btn-primary">Approve this attempt</button>
+          <button type="button" id="mission-reject" class="btn-secondary">Reject and continue</button>
+          <button type="button" id="mission-abort" class="btn-secondary">Abort mission</button>
+        </div>
+        <p id="mission-evidence"></p>
+      </section>
     </section>
 
     <!-- SECTION 2: Agent's Pick -->

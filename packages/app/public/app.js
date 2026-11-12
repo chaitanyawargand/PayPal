@@ -837,14 +837,86 @@
     }
   }
 
+  let activeMissionId = null;
+  function renderMission(view) {
+    const panel = document.getElementById("mission-result");
+    const status = document.getElementById("mission-status");
+    const timeline = document.getElementById("mission-timeline");
+    const questions = document.getElementById("mission-clarifications");
+    const stepUp = document.getElementById("mission-step-up");
+    panel.classList.remove("hidden");
+    status.textContent = view.status.replaceAll("_", " ");
+    timeline.replaceChildren(...(view.events || []).map((message) => {
+      const item = document.createElement("li"); item.textContent = message; return item;
+    }));
+    questions.textContent = (view.questions || []).join(" ");
+    stepUp.classList.toggle("hidden", view.status !== "STEP_UP_REQUIRED");
+    const evidence = document.getElementById("mission-evidence");
+    evidence.textContent = view.status === "COMPLETED"
+      ? `Captured $${(view.capturedCents / 100).toFixed(2)}. Evidence ${view.evidenceValid ? "VALID" : "INVALID"}.`
+      : view.status === "NO_PURCHASE" || view.status === "ABORTED" ? `Captured $0.00.${view.securityAlert ? ` ${view.securityAlert}` : ""}` : "";
+    activeMissionId = view.missionId || activeMissionId;
+  }
+
+  async function startMissionFlow() {
+    if (state.busy) return;
+    const prompt = el.promptInput.value.trim();
+    if (!prompt) return;
+    state.busy = true;
+    activeMissionId = null;
+    el.btnAskAgent.disabled = true;
+    el.shopStatusText.classList.remove("hidden");
+    document.getElementById("mission-clarifications").textContent = "";
+    document.getElementById("mission-timeline").replaceChildren();
+    document.getElementById("mission-evidence").textContent = "";
+    document.getElementById("mission-step-up").classList.add("hidden");
+    document.getElementById("mission-result").classList.remove("hidden");
+    try {
+      const view = await apiPost("/api/mission/start", { prompt });
+      renderMission(view);
+    } catch (err) {
+      document.getElementById("mission-status").textContent = "Mission could not start";
+      document.getElementById("mission-clarifications").textContent = err.message || "Request failed.";
+    } finally {
+      state.busy = false;
+      el.btnAskAgent.disabled = false;
+      el.shopStatusText.classList.add("hidden");
+    }
+  }
+
+  async function decideMission(decision) {
+    if (!activeMissionId || state.busy) return;
+    state.busy = true;
+    document.getElementById("mission-approve").disabled = true;
+    document.getElementById("mission-reject").disabled = true;
+    try {
+      const view = await apiPost(`/api/missions/${encodeURIComponent(activeMissionId)}/step-up`, { decision });
+      renderMission(view);
+    } catch (err) {
+      document.getElementById("mission-clarifications").textContent = err.message || "STEP_UP decision failed.";
+    } finally {
+      state.busy = false;
+      document.getElementById("mission-approve").disabled = false;
+      document.getElementById("mission-reject").disabled = false;
+    }
+  }
+
+  async function abortMission() {
+    if (!activeMissionId || state.busy) return;
+    state.busy = true;
+    try { renderMission(await apiPost(`/api/missions/${encodeURIComponent(activeMissionId)}/abort`, {})); }
+    catch (err) { document.getElementById("mission-clarifications").textContent = err.message || "Abort failed."; }
+    finally { state.busy = false; }
+  }
+
   // --- Initialize Event Listeners ---
   function init() {
     // 1. Section 1 Shop Actions
-    el.btnAskAgent.addEventListener("click", startDiscoveryFlow);
+    el.btnAskAgent.addEventListener("click", startMissionFlow);
     el.promptInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        startDiscoveryFlow();
+        startMissionFlow();
       }
     });
 
@@ -854,6 +926,9 @@
         el.promptInput.value = chip.dataset.prompt;
       });
     });
+    document.getElementById("mission-approve").addEventListener("click", () => decideMission("APPROVE"));
+    document.getElementById("mission-reject").addEventListener("click", () => decideMission("REJECT"));
+    document.getElementById("mission-abort").addEventListener("click", abortMission);
 
     // 2. Section 3 Contract Actions
     el.btnSignSubmit.addEventListener("click", signAndSubmitFlow);
